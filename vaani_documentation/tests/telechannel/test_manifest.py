@@ -43,6 +43,7 @@ from telechannel.manifest import (
     filter_holdout_unseen_noise,
     generate_splits,
     get_holdout_sets,
+    holdout_mask,
     read_manifest,
     validate_metadata,
     write_manifest_row,
@@ -392,6 +393,97 @@ def test_assert_no_leakage_detects_injected_speaker_leakage():
 
     with pytest.raises(AssertionError):
         assert_no_leakage(result)
+
+
+# ---------------------------------------------------------------------------
+# Hold-out exclusion from train: a hold-out-matching group must never be
+# assigned to `train`, even by chance -- otherwise the four generalization
+# hold-out sets (master plan section 5.4) are silently contaminated.
+# ---------------------------------------------------------------------------
+
+
+def test_holdout_mask_flags_all_four_exemplar_rows():
+    df = _synthetic_manifest()
+    mask = holdout_mask(df)
+    flagged_clips = set(df.loc[mask, "source_clip"])
+    assert flagged_clips == {
+        "sc_holdout_gen",
+        "sc_holdout_codec",
+        "sc_holdout_noise",
+        "sc_holdout_real",
+    }
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4, 5, 6, 7, 42, 123])
+def test_generate_splits_never_puts_holdout_rows_in_train(seed):
+    """Headline fix: across many seeds, no hold-out-matching row is ever
+    assigned to `train`, even though a small single-row group would
+    otherwise be assigned by pure chance based on the shuffle order."""
+    df = _synthetic_manifest()
+    result = generate_splits(df, seed=seed)
+
+    mask = holdout_mask(result)
+    holdout_rows = result[mask]
+    assert not holdout_rows.empty  # fixture sanity check
+
+    leaked_into_train = holdout_rows[holdout_rows["split"] == "train"]
+    assert leaked_into_train.empty, (
+        f"hold-out-matching row(s) landed in train at seed={seed}: "
+        f"{leaked_into_train['source_clip'].tolist()}"
+    )
+
+
+def test_generate_splits_holdout_exclusion_disableable_and_would_otherwise_leak():
+    """Control proving the fixture/test above is not vacuous: with
+    `exclude_holdouts_from_train=False`, sweeping the same seeds used by
+    the leakage-safety check above, the raw group shuffle DOES place some
+    hold-out-matching row in train on at least one seed -- i.e. the
+    exclusion logic in generate_splits is doing real work, not defending
+    against an impossible case."""
+    df = _synthetic_manifest()
+    seeds = [0, 1, 2, 3, 4, 5, 6, 7, 42, 123]
+
+    leaked_on_any_seed = False
+    for seed in seeds:
+        result = generate_splits(df, seed=seed, exclude_holdouts_from_train=False)
+        mask = holdout_mask(result)
+        holdout_rows = result[mask]
+        if (holdout_rows["split"] == "train").any():
+            leaked_on_any_seed = True
+            break
+
+    assert leaked_on_any_seed, (
+        "expected exclude_holdouts_from_train=False to leak a hold-out row "
+        "into train on at least one seed in the sweep -- if this fails, "
+        "the fixture no longer exercises the case the fix guards against"
+    )
+
+
+def test_generate_splits_holdout_route_is_configurable():
+    df = _synthetic_manifest()
+    result = generate_splits(df, seed=0, holdout_route="demo")
+
+    mask = holdout_mask(result)
+    holdout_rows = result[mask]
+    assert (holdout_rows["split"] != "train").all()
+    # Whichever holdout rows would have been "train" are now "demo"
+    # instead of the default "test" reroute target.
+    without_exclusion = generate_splits(df, seed=0, exclude_holdouts_from_train=False)
+    would_have_been_train = without_exclusion.loc[
+        without_exclusion["split"] == "train", "source_clip"
+    ]
+    rerouted = result[result["source_clip"].isin(would_have_been_train) & mask]
+    if not rerouted.empty:
+        assert (rerouted["split"] == "demo").all()
+
+
+def test_generate_splits_holdout_exclusion_preserves_leakage_safety():
+    """The hold-out fix must not reintroduce clip/speaker leakage -- rerun
+    the full leakage assertion after hold-out rerouting."""
+    df = _synthetic_manifest()
+    for seed in (0, 1, 2, 3):
+        result = generate_splits(df, seed=seed)
+        assert_no_leakage(result)  # should not raise
 
 
 def test_generate_splits_custom_real_speech_fn():

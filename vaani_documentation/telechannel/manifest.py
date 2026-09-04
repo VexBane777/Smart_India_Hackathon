@@ -249,6 +249,23 @@ def get_holdout_sets(df):
     return {name: fn(df) for name, fn in HOLDOUT_FILTERS.items()}
 
 
+def holdout_mask(df):
+    """
+    Boolean Series (indexed like `df`), True for any row matching ANY of
+    the four HOLDOUT_FILTERS (with their documented default values).
+
+    This is the single source of truth `generate_splits` uses to decide
+    which rows/groups must never end up in `train` -- see that function's
+    docstring for why this matters (a hold-out-matching row leaking into
+    train silently invalidates the generalization claim the hold-out set
+    exists to support).
+    """
+    mask = pd.Series(False, index=df.index)
+    for subset in get_holdout_sets(df).values():
+        mask.loc[subset.index] = True
+    return mask
+
+
 # ---------------------------------------------------------------------------
 # Step 2: leakage-safe split generation.
 # ---------------------------------------------------------------------------
@@ -315,6 +332,9 @@ def generate_splits(
     demo_frac=0.05,
     seed=42,
     real_speech_fn=None,
+    exclude_holdouts_from_train=True,
+    holdout_mask_fn=None,
+    holdout_route=None,
 ):
     """
     Assign a `split` column (one of SPLIT_NAMES) to every row of `df`,
@@ -329,6 +349,35 @@ def generate_splits(
     windows, which is the master-plan section 5.4 / DOC1 1.6 hard rule
     this whole module exists to enforce.
 
+    Hold-out exclusion from train
+    ------------------------------
+    By default (`exclude_holdouts_from_train=True`), any leakage-group
+    containing at least one row matching ANY of the four HOLDOUT_FILTERS
+    (see `holdout_mask`) is never assigned to `train`, even if the random
+    group shuffle would otherwise have put it there. Without this, a
+    hold-out-matching clip/speaker could leak into train by chance, which
+    would silently invalidate the generalization claims the hold-out sets
+    exist to support (master plan section 5.4 calls these "four held-out
+    test sets" whose EER numbers ARE the generalization story -- a
+    contaminated train set makes those numbers dishonest without anyone
+    noticing).
+
+    Design choice: hold-out-matching groups that would have landed in
+    `train` are rerouted to `test` (not a new dedicated split name),
+    because master plan section 5.4 already frames all four hold-out sets
+    as "held-out TEST sets" and downstream training/eval code only needs
+    to know about the existing SPLIT_NAMES. Groups that the random
+    assignment already put in `val`/`test`/`demo` are left alone (only a
+    `train` assignment is overridden) -- being held out of train is the
+    hard requirement; which non-train split a hold-out group lands in is
+    incidental. This does shift the realized train/test fractions further
+    from the requested `val_frac`/`test_frac`/`demo_frac` (see the
+    approximate-fractions note below); that's an accepted trade-off,
+    documented the same way in `run_corpus.yaml`. Pass
+    `exclude_holdouts_from_train=False` to disable this (e.g. for a
+    debugging run), or `holdout_route="demo"` (etc.) to reroute elsewhere,
+    or `holdout_mask_fn` to override which rows count as hold-out-matching.
+
     Args:
         df: manifest DataFrame (e.g. from read_manifest()). Must have
             `source_clip` and `speaker_anon` columns.
@@ -337,11 +386,20 @@ def generate_splits(
             (not individual rows) are assigned, actual fractions will
             deviate somewhat from these targets when groups are large or
             uneven -- leakage-safety is exact, fraction-matching is
-            approximate by construction.
+            approximate by construction. Hold-out rerouting (see above)
+            adds a further, one-directional deviation (train can only
+            shrink, never grow, relative to the un-rerouted assignment).
         seed: RNG seed for the (deterministic, reproducible) group shuffle
             order that fractions are measured against.
         real_speech_fn: optional callable(row) -> bool overriding the
             default "real speech" predicate (`speaker_anon` non-blank).
+        exclude_holdouts_from_train: if True (default), enforce the
+            hold-out exclusion described above.
+        holdout_mask_fn: optional callable(df) -> boolean Series overriding
+            the default `holdout_mask` (which ORs together all four
+            HOLDOUT_FILTERS).
+        holdout_route: split name to reroute hold-out-matching
+            `train`-assigned groups to. Defaults to `"test"`.
 
     Returns:
         A copy of `df` with a new `split` column (values from SPLIT_NAMES).
@@ -361,11 +419,20 @@ def generate_splits(
 
     if real_speech_fn is None:
         real_speech_fn = _default_real_speech_fn
+    if holdout_mask_fn is None:
+        holdout_mask_fn = holdout_mask
+    if holdout_route is None:
+        holdout_route = "test"
 
     group_of_clip = _leakage_groups(df, real_speech_fn)
 
     df = df.copy()
     df["_leak_group"] = df["source_clip"].map(group_of_clip)
+
+    holdout_groups = set()
+    if exclude_holdouts_from_train:
+        is_holdout_row = holdout_mask_fn(df)
+        holdout_groups = set(df.loc[is_holdout_row.values, "_leak_group"].unique())
 
     group_sizes = df.groupby("_leak_group").size()
     groups = group_sizes.index.to_numpy()
@@ -393,6 +460,13 @@ def generate_splits(
             split_of_group[group_id] = "test"
         else:
             split_of_group[group_id] = "demo"
+
+    # Enforce hold-out exclusion from train: a hold-out-matching group that
+    # the random shuffle assigned to train is rerouted -- see the
+    # "Hold-out exclusion from train" section of this function's docstring.
+    for group_id in holdout_groups:
+        if split_of_group.get(group_id) == "train":
+            split_of_group[group_id] = holdout_route
 
     df["split"] = df["_leak_group"].map(split_of_group)
     df = df.drop(columns=["_leak_group"])

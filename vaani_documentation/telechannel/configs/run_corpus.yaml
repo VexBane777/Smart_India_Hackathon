@@ -42,8 +42,20 @@ splits:
 # "unseen generator (RVC-team), unseen codec (AMR-WB), unseen noise
 # (freesound_horn), all real recorded calls." These are carved out via
 # manifest.HOLDOUT_FILTERS as filters on manifest fields (never folder
-# names, per DOC1 1.6 hard rule 1) -- they are independent of, and may
-# overlap with, the train/val/test/demo split column.
+# names, per DOC1 1.6 hard rule 1).
+#
+# IMPORTANT: these are NOT merely an informational overlay on top of the
+# train/val/test/demo split -- manifest.generate_splits() actively enforces
+# that any leakage-group (source_clip, or a speaker-merged cluster of
+# source_clips) containing a hold-out-matching row is excluded from
+# `train` (default: rerouted to `test`, since section 5.4 already frames
+# all four as held-out TEST sets). Without this, a hold-out clip/speaker
+# could land in train by chance, silently invalidating the "cross-
+# generator EER on held-out generator Y" / "unseen generator + In-the-Wild"
+# claims the master plan's headline numbers depend on. See
+# generate_splits()'s docstring ("Hold-out exclusion from train") for the
+# full reasoning and the `exclude_holdouts_from_train` / `holdout_route`
+# override knobs.
 holdouts:
   unseen_generator:
     field: generator
