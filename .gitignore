@@ -6,7 +6,8 @@
 *.opus
 *.m4a
 
-# The DVR/NVR project lives in its own worktree/branch, not on vaani
+# The nyaya project lives in its own worktree/branch, not on vaani
+/nyaya/
 /DVR/
 
 # Python / general
