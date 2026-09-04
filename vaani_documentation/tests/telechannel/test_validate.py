@@ -26,6 +26,8 @@ from telechannel.validate_reality import (
     analyze_call,
     compare_to_sim,
     plot_validation,
+    _find_bandwidth_cutoff,
+    _strip_silence,
 )
 from telechannel.stages.bandlimit import apply_bandlimit
 
@@ -85,9 +87,12 @@ def test_analyze_call_returns_expected_keys():
     assert 0.0 <= result["hf_ratio"] <= 1.0
 
 
-def test_analyze_call_strips_silence_reduces_sample_count():
+def test_strip_silence_reduces_sample_count():
     # A recording with a big silent chunk should end up with strictly
-    # fewer voiced samples than the raw file length once VAD is applied.
+    # fewer voiced samples than the raw signal length once VAD is applied
+    # (this directly exercises _strip_silence, rather than just checking
+    # that downstream metrics are finite, which would also pass if
+    # stripping were a no-op).
     sr = SR
     n = int(sr * 4.0)
     x = np.zeros(n)
@@ -95,10 +100,28 @@ def test_analyze_call_strips_silence_reduces_sample_count():
     t = np.arange(n) / sr
     x[n // 3: 2 * n // 3] = np.sin(2 * np.pi * 300 * t[n // 3: 2 * n // 3])
 
+    stripped = _strip_silence(x, sr)
+
+    assert len(stripped) < len(x)
+    # The voiced region is ~n/3 samples; allow generous slack for the
+    # librosa frame/hop granularity of the split boundaries.
+    signal_len = n // 3
+    assert stripped.size <= signal_len + sr  # well under the full 4 s
+    assert stripped.size >= signal_len - sr
+
+
+def test_analyze_call_on_mostly_silent_input_still_finite():
+    # The full analyze_call pipeline should not blow up on mostly-silent
+    # input; hf_ratio/cutoff should be finite even after VAD strips most
+    # of the clip.
+    sr = SR
+    n = int(sr * 4.0)
+    x = np.zeros(n)
+    t = np.arange(n) / sr
+    x[n // 3: 2 * n // 3] = np.sin(2 * np.pi * 300 * t[n // 3: 2 * n // 3])
+
     result = analyze_call((x, sr))
 
-    # The LTAS still computes and doesn't blow up on the mostly-silent
-    # input; hf_ratio/cutoff should be finite.
     assert np.isfinite(result["cutoff"])
     assert np.isfinite(result["hf_ratio"])
 
@@ -121,6 +144,59 @@ def test_bandlimited_signal_has_lower_cutoff_than_wideband():
     # Telephony passband cuts off around 3400 Hz; allow generous slack
     # since Welch's method has limited frequency resolution.
     assert narrowband_metrics["cutoff"] < 4500
+
+
+def test_find_bandwidth_cutoff_robust_to_dominant_off_band_peak():
+    """
+    Regression test for the original harmonic-fixture bug: an earlier
+    version of _find_bandwidth_cutoff anchored its "0 dB" reference to
+    the single global-argmax PSD bin. That broke when a dominant peak
+    sat *outside* the frequency range that actually determines the
+    signal's bandwidth (e.g. a strong low-frequency fundamental that
+    band-limiting removes) — removing that dominant bin shifted which
+    bin was "the peak", which shifted the entire reference level, which
+    made the computed cutoff jump around for reasons having nothing to
+    do with the signal's actual bandwidth.
+
+    This test builds that exact failure shape directly against
+    `_find_bandwidth_cutoff` (bypassing VAD/Welch estimation noise): a
+    spectrum with real signal content up to ~2000 Hz, plus a huge
+    dominant peak at ~100 Hz (well below the 300-800 Hz reference band)
+    that a telephony band-limit filter would strip out entirely. The
+    cutoff should reflect the ~2000 Hz signal extent in both cases, and
+    should barely move when the dominant off-band peak is removed —
+    proving robustness to peak-shifting, not just avoidance of it via
+    fixture choice (see task-11-report.md for the harmonic-fixture
+    postmortem this codifies).
+    """
+    freqs = np.linspace(0, 8000, 801)  # 10 Hz per bin
+
+    def _build(include_dominant_peak):
+        psd_db = np.full_like(freqs, -40.0)  # noise floor
+        # Reference band + "true" signal band, both at a similar level:
+        # this is the actual bandwidth we want _find_bandwidth_cutoff to
+        # recover, from 300 Hz up to ~2000 Hz.
+        signal_mask = (freqs >= 300) & (freqs <= 2000)
+        psd_db[signal_mask] = -10.0
+        if include_dominant_peak:
+            # A huge peak far below the reference band — this used to be
+            # the argmax bin and would have wrecked the old algorithm's
+            # "0 dB" reference.
+            dominant_mask = (freqs >= 90) & (freqs <= 110)
+            psd_db[dominant_mask] = 20.0
+        return psd_db
+
+    cutoff_with_dominant_peak = _find_bandwidth_cutoff(freqs, _build(True))
+    cutoff_without_dominant_peak = _find_bandwidth_cutoff(freqs, _build(False))
+
+    # Both should reflect the true ~2000 Hz signal extent.
+    assert 1800 <= cutoff_with_dominant_peak <= 2200
+    assert 1800 <= cutoff_without_dominant_peak <= 2200
+
+    # And, crucially, removing the dominant off-band peak (simulating
+    # what band-limiting does to a fixture with a strong sub-300-Hz
+    # fundamental) should barely move the cutoff.
+    assert abs(cutoff_with_dominant_peak - cutoff_without_dominant_peak) < 150
 
 
 def test_compare_to_sim_identical_metrics_gives_zero_diff_and_correlation_one():
@@ -157,6 +233,63 @@ def test_compare_to_sim_clean_recording_vs_clean_recipe_correlation_near_one():
     comparison = compare_to_sim(real_metrics, sim_metrics)
 
     assert comparison["ltas_correlation"] >= 0.9
+
+
+def test_compare_to_sim_different_sample_rates_restricts_to_overlap():
+    """
+    compare_to_sim's docstring claims comparison happens "on their
+    overlapping frequency range." All other tests use matched sample
+    rates (so real_freqs == sim_freqs and this code path is never
+    exercised) — this test uses genuinely different sample rates, which
+    is also a realistic scenario (a real narrowband/PSTN call vs. a
+    wideband simulated recipe, or vice versa), to prove overlap
+    restriction actually happens instead of numpy.interp silently
+    flat-extrapolating past the simulated grid's real range.
+    """
+    # Two independent draws of the same shaped-noise "recipe" at
+    # different sample rates (16 kHz "real", 8 kHz "sim" — e.g. standing
+    # in for a real wideband call vs. a narrowband-simulated one). Using
+    # independent generation rather than resampling one into the other
+    # avoids conflating this test with anti-aliasing-filter artifacts
+    # near the lower sample rate's Nyquist edge; the point here is purely
+    # to prove the mismatched-grid comparison path restricts to the true
+    # overlap instead of extrapolating.
+    real_x, sr_hi = _synthetic_clean_recording(sr=16000, seed=3)
+    sim_x, sr_lo = _synthetic_clean_recording(sr=8000, seed=4)
+
+    real_metrics = analyze_call((real_x, sr_hi))
+    sim_metrics = analyze_call((sim_x, sr_lo))
+
+    # Sanity: the two frequency grids really do differ in range (sim's
+    # Nyquist is half of real's), so this genuinely exercises the
+    # mismatched-grid branch.
+    assert real_metrics["ltas"]["freqs"].max() > sim_metrics["ltas"]["freqs"].max() * 1.5
+
+    comparison = compare_to_sim(real_metrics, sim_metrics)
+
+    # No NaN/inf from extrapolation artifacts, and since both sides share
+    # the same underlying 1/sqrt(f) shaping recipe, restricting to the
+    # true overlap (0 Hz - sim's Nyquist) should give a strong positive
+    # correlation despite the independent noise draws.
+    assert np.isfinite(comparison["ltas_correlation"])
+    assert comparison["ltas_correlation"] > 0.7
+
+
+def test_compare_to_sim_raises_on_non_overlapping_frequency_grids():
+    x, sr = _synthetic_clean_recording(seed=4)
+    metrics = analyze_call((x, sr))
+
+    fake_disjoint_metrics = {
+        "cutoff": metrics["cutoff"],
+        "hf_ratio": metrics["hf_ratio"],
+        "ltas": {
+            "freqs": metrics["ltas"]["freqs"] + 1_000_000.0,
+            "psd_db": metrics["ltas"]["psd_db"],
+        },
+    }
+
+    with pytest.raises(ValueError):
+        compare_to_sim(metrics, fake_disjoint_metrics)
 
 
 def test_plot_validation_writes_file(tmp_path):
