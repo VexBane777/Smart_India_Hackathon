@@ -253,7 +253,7 @@ def test_verify_clip_pass_all_checks():
     # Generate clean, short-duration audio that passes all checks
     audio = 0.1 * np.sin(2 * np.pi * 1000 * t)
 
-    passed, reason = verify_clip(audio, sr=sr)
+    passed, reason = verify_clip(audio, sr=sr, log_failures=False)
 
     assert passed is True
     assert "passed" in reason.lower()
@@ -265,7 +265,7 @@ def test_verify_clip_fail_silent():
     duration_s = 2.0
     audio = np.zeros(int(sr * duration_s))
 
-    passed, reason = verify_clip(audio, sr=sr)
+    passed, reason = verify_clip(audio, sr=sr, log_failures=False)
 
     assert passed is False
     assert "silence" in reason.lower()
@@ -282,7 +282,7 @@ def test_verify_clip_fail_clipping():
     audio[100] = 1.0  # Add exact clipping
     audio[200] = -1.0
 
-    passed, reason = verify_clip(audio, sr=sr)
+    passed, reason = verify_clip(audio, sr=sr, log_failures=False)
 
     assert passed is False
     assert "clipping" in reason.lower()
@@ -296,7 +296,7 @@ def test_verify_clip_fail_wrong_duration():
     t = np.arange(int(sr * duration_s)) / sr
     audio = 0.1 * np.sin(2 * np.pi * 1000 * t)
 
-    passed, reason = verify_clip(audio, sr=sr)
+    passed, reason = verify_clip(audio, sr=sr, log_failures=False)
 
     assert passed is False
     assert "duration" in reason.lower()
@@ -318,7 +318,7 @@ def test_verify_clip_with_narrowband_check_enabled():
     sos = butter(5, [low, high], btype="bandpass", output="sos")
     audio = sosfiltfilt(sos, audio)
 
-    passed, reason = verify_clip(audio, sr=sr, is_narrowband=True)
+    passed, reason = verify_clip(audio, sr=sr, is_narrowband=True, log_failures=False)
 
     assert passed is True
     assert "narrowband" in reason.lower()
@@ -333,7 +333,7 @@ def test_verify_clip_narrowband_check_fails():
     # Create full-band audio (high-frequency tone)
     audio = 0.1 * np.sin(2 * np.pi * 5000 * t)
 
-    passed, reason = verify_clip(audio, sr=sr, is_narrowband=True)
+    passed, reason = verify_clip(audio, sr=sr, is_narrowband=True, log_failures=False)
 
     assert passed is False
     assert "narrowband" in reason.lower()
@@ -438,4 +438,4 @@ def test_check_narrowband_all_zeros():
 
     # All-zero audio has no energy, so out-of-band energy will be zero
     # relative_db will be -inf, which is < -25 dB, so it should pass
-    assert passed is True or passed is False  # Either outcome is valid for edge case
+    assert passed is True

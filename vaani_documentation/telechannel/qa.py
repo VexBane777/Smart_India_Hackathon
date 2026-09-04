@@ -142,7 +142,7 @@ def verify_clip(
     sr: int = 16000,
     clip_id: str = None,
     is_narrowband: bool = False,
-    log_failures: bool = False,
+    log_failures: bool = True,
 ) -> Tuple[bool, str]:
     """
     Verify that an audio clip passes all QA gates.
@@ -150,12 +150,16 @@ def verify_clip(
     Runs silence, clipping, (optionally) narrowband, and duration checks
     on the provided audio array. Returns True only if all enabled checks pass.
 
+    Per DOC1_TELECHANNEL_SPEC.md §1.8, failures are logged to qa_failures.jsonl
+    by default. Set log_failures=False to opt out (e.g., in unit tests).
+
     Args:
         audio: 1-D audio signal (float64), values in [-1, 1].
         sr: Sample rate in Hz. Defaults to 16000.
         clip_id: Optional clip identifier for logging purposes.
         is_narrowband: If True, check narrowband energy constraints.
-        log_failures: If True, write failures to qa_failures.jsonl.
+        log_failures: If True (default), write failures to qa_failures.jsonl.
+            Set False to suppress logging (e.g., in tests).
 
     Returns:
         (bool, str): (passed, reason)
