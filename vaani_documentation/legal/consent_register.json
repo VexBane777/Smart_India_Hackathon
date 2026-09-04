@@ -1,9 +1,0 @@
-{
-  "speakers": {
-    "spk_001": {
-      "consent_id": "c_260312_test",
-      "opt_ins": ["A1", "A3"],
-      "withdrawn": false
-    }
-  }
-}
