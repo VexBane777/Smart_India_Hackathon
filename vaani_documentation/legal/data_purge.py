@@ -12,7 +12,9 @@ Usage:
 """
 
 import argparse
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -47,10 +49,30 @@ def purge_speaker(speaker_id: str, manifests_dir: Path = DEFAULT_MANIFESTS_DIR) 
             continue
 
         df = df[~mask]
-        df.to_parquet(manifest_path, index=False)
+        _atomic_write_parquet(df, manifest_path)
         removed_summary[manifest_path.name] = num_removed
 
     return removed_summary
+
+
+def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
+    """
+    Write `df` to `path` as parquet atomically: write to a temp file in the
+    same directory, then os.replace() over the target so a crash mid-write
+    can never leave `path` truncated or corrupted.
+    """
+    path = Path(path)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    os.close(fd)  # pandas/pyarrow will reopen the path by name
+    try:
+        df.to_parquet(tmp_name, index=False)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.remove(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def main() -> int:

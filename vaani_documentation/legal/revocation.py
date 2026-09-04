@@ -18,7 +18,9 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,11 +50,32 @@ def revoke_consent(speaker_id: str, register_path: Path = DEFAULT_REGISTER_PATH)
     speakers[speaker_id]["withdrawn"] = True
     speakers[speaker_id]["withdrawn_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    with open(register_path, "w", encoding="utf-8") as f:
-        json.dump(register, f, indent=2)
-        f.write("\n")
+    _atomic_write_json(register_path, register)
 
     return speakers[speaker_id]
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """
+    Write `data` as JSON to `path` atomically: write to a temp file in the
+    same directory, flush+fsync, then os.replace() over the target so a
+    crash mid-write can never leave `path` truncated or corrupted.
+    """
+    path = Path(path)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.remove(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def main() -> int:
