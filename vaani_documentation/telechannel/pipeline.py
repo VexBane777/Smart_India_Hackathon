@@ -9,9 +9,9 @@ fixed physical order a real phone call is degraded in:
 
 Each stage is applied only if the recipe supplies a (non-null) config for
 it, so a recipe can skip stages it doesn't need (e.g. `clean` skips codec
-entirely; `volte`/`whatsapp` skip bandlimit per Doc 1's narrowband-only
-band-limiting rule, except `whatsapp` deliberately enables it here — see
-channels.yaml's comment and task-8-report.md).
+entirely; `volte`/`whatsapp` both skip bandlimit, since Doc 1's
+narrowband-only band-limiting rule only applies to the narrowband recipes
+(pstn/gsm_2g/cellular_3g/tandem_xnet) — see channels.yaml's comment).
 
 `codec` is always a list of `{codec, bitrate}` entries applied in sequence:
 zero entries skips the codec stage, one entry is a normal single round-trip,
