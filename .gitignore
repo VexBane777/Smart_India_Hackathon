@@ -1,0 +1,29 @@
+# Audio must never enter git (per VAANI Global Constraints)
+*.wav
+*.flac
+*.mp3
+*.ogg
+*.opus
+*.m4a
+
+# The DVR/NVR project lives in its own worktree/branch, not on vaani
+/DVR/
+
+# Python / general
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Data / runs (large or generated)
+/data/
+/runs/
+*.parquet
+*.onnx
+*.pth
+
+# Superpowers SDD scratch workspace (git-ignored per skill)
+.superpowers/
