@@ -85,11 +85,11 @@ recipes:
     bandlimit: { enabled: false }
 
   # WhatsApp: Opus at a low-ish bitrate, higher packet loss (per Doc 1 1.5:
-  # "loss: higher"). Bandlimit is enabled here specifically so this recipe's
-  # end-to-end test (Task 8 brief Step 4) exercises the bandlimit stage on a
-  # real 2s window, per the carried-forward review finding on bandlimit.py's
-  # test coverage gap — a deliberate deviation from Doc 1's recipe table
-  # (which only band-limits the narrowband recipes); see task-8-report.md.
+  # "loss: higher"). Wideband, like real WhatsApp/Opus calls — no bandlimit
+  # stage, matching Doc 1 1.5's recipe table (band-limiting is only applied
+  # to the narrowband recipes: pstn/gsm_2g/cellular_3g/tandem_xnet). The 2s
+  # bandlimit regression check lives in test_pipeline.py as a standalone
+  # apply_bandlimit test, not piggybacked on this recipe.
   whatsapp:
     rir: { room: near, wet_gain: 0.4 }
     noise: { type: white, snr_db: 20 }
@@ -97,7 +97,7 @@ recipes:
     codec:
       - { codec: libopus, bitrate: "16k" }
     loss: { p_gb: 0.06, p_bg: 0.20 }
-    bandlimit: { enabled: true }
+    bandlimit: { enabled: false }
 
   # Tandem/cross-network transcoding: two codec round-trips in sequence
   # (AMR-NB then G.711 mu-law), simulating a call that crosses two networks

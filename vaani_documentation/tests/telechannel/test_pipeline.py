@@ -26,6 +26,7 @@ import pytest
 
 from telechannel import pipeline
 from telechannel.pipeline import load_config, process_clip
+from telechannel.stages.bandlimit import apply_bandlimit
 
 HAS_FFMPEG = shutil.which("ffmpeg") is not None
 
@@ -198,55 +199,35 @@ def test_clean_recipe_calls_codec_roundtrip_zero_times(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_whatsapp_2s_clip_bandlimit_no_edge_artifact_mocked_codec(monkeypatch):
+def test_apply_bandlimit_2s_window_no_edge_artifact():
     """
     Carried-forward review finding: bandlimit.py's unit test only validated
     attenuation with a 10s synthetic tone; this verifies its behavior on a
-    real 2s window (the system's actual window size) as part of the
-    whatsapp recipe's end-to-end run (codec mocked so this needs no
-    ffmpeg — the orchestration and bandlimit stage are exercised for real;
-    only the codec round-trip is stubbed).
+    real 2s window (the system's actual window size) directly against
+    `apply_bandlimit`, independent of any recipe. (Previously this rode
+    along on a full `whatsapp` pipeline run, which required forcing
+    `whatsapp.bandlimit.enabled = true` in channels.yaml — non-compliant
+    with Doc 1 1.5, which specifies WhatsApp/Opus as wideband/unfiltered.
+    That recipe config has been reverted to `false`; this test now covers
+    the same regression concern without depending on any recipe's config.)
     """
-    monkeypatch.setattr(pipeline, "codec_roundtrip", _identity_codec_roundtrip)
-
     sr = 16000
     duration_s = 2.0
-    # Mix of an in-band tone (1kHz) and an out-of-band tone (5kHz), quiet
-    # enough that mic's up-to-+12dB gain doesn't push it into clipping.
+    # Mix of an in-band tone (1kHz) and an out-of-band tone (5kHz).
     x = _sine(1000, sr, duration_s, amplitude=0.15) + _sine(5000, sr, duration_s, amplitude=0.15)
 
-    y = process_clip(x, "whatsapp", sr=sr, rng=np.random.default_rng(7))
+    y = apply_bandlimit(x, sr=sr)
 
     # No edge/transient artifact: finite, no wraparound clipping/blow-up.
     assert len(y) == len(x)
     assert np.all(np.isfinite(y))
     assert np.max(np.abs(y)) < 5.0  # generous bound; a windowing blow-up would be orders larger
 
-    # Compare against the same recipe/seed with bandlimit disabled, to
-    # isolate the bandlimit stage's real effect at this short duration
-    # (everything upstream of it — RIR/noise/mic/loss — is identical).
-    config = load_config()
-    no_band_config = {
-        "version": config["version"],
-        "sample_rate": config["sample_rate"],
-        "rooms": config["rooms"],
-        "recipes": {
-            **config["recipes"],
-            "whatsapp_no_band": {
-                **config["recipes"]["whatsapp"],
-                "bandlimit": {"enabled": False},
-            },
-        },
-    }
-    y_no_band = process_clip(
-        x, "whatsapp_no_band", sr=sr, config=no_band_config, rng=np.random.default_rng(7)
-    )
-
     out_of_band_lo, out_of_band_hi = 4000, 8000
     in_band_lo, in_band_hi = 300, 3400
 
     banded_oob = _band_energy(y, sr, out_of_band_lo, out_of_band_hi)
-    unbanded_oob = _band_energy(y_no_band, sr, out_of_band_lo, out_of_band_hi)
+    unbanded_oob = _band_energy(x, sr, out_of_band_lo, out_of_band_hi)
     banded_inband = _band_energy(y, sr, in_band_lo, in_band_hi)
 
     # The bandlimit stage should still measurably suppress the out-of-band
