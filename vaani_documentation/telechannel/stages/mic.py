@@ -17,7 +17,7 @@ GAIN_DB_MAX = 12
 CLIP_LIMIT = 0.5
 
 
-def apply_mic(x, clip_prob=0.2):
+def apply_mic(x, clip_prob=0.2, rng=None):
     """
     Apply a random gain in [-6, +12] dB to `x`, then, with probability
     `clip_prob`, hard-clip the result to [-0.5, 0.5].
@@ -26,12 +26,16 @@ def apply_mic(x, clip_prob=0.2):
         x: 1-D input signal (numpy array).
         clip_prob: Probability in [0, 1] that clipping is applied after
             the gain stage. Defaults to 0.2.
+        rng: Optional numpy.random.Generator for reproducibility. If not
+            given, a fresh `np.random.default_rng()` is used (the previous,
+            non-reproducible behavior).
 
     Returns:
         numpy array the same length as `x`.
     """
     x = np.asarray(x, dtype=np.float64)
-    rng = np.random.default_rng()
+    if rng is None:
+        rng = np.random.default_rng()
 
     gain_db = rng.uniform(GAIN_DB_MIN, GAIN_DB_MAX)
     gain_linear = 10 ** (gain_db / 20)

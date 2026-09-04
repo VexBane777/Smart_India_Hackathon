@@ -71,3 +71,21 @@ def test_apply_noise_unknown_type_raises():
     x = np.zeros(100)
     with pytest.raises(ValueError):
         apply_noise(x, "purple", snr_db=10)
+
+
+def test_apply_noise_injected_rng_is_reproducible():
+    x = np.random.default_rng(0).standard_normal(1000)
+
+    y1 = apply_noise(x, "white", snr_db=10, rng=np.random.default_rng(123))
+    y2 = apply_noise(x, "white", snr_db=10, rng=np.random.default_rng(123))
+
+    assert np.array_equal(y1, y2)
+
+
+def test_apply_noise_pink_injected_rng_is_reproducible():
+    x = np.random.default_rng(0).standard_normal(1000)
+
+    y1 = apply_noise(x, "pink", snr_db=10, rng=np.random.default_rng(123))
+    y2 = apply_noise(x, "pink", snr_db=10, rng=np.random.default_rng(123))
+
+    assert np.array_equal(y1, y2)

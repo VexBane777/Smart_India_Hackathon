@@ -46,3 +46,12 @@ def test_apply_mic_clip_prob_zero_never_clips():
     for _ in range(100):
         y = apply_mic(x, clip_prob=0.0)
         assert np.max(np.abs(y)) > 0.5
+
+
+def test_apply_mic_injected_rng_is_reproducible():
+    x = np.array([10.0, -10.0, 5.0, -5.0, 0.0])
+
+    y1 = apply_mic(x, clip_prob=0.5, rng=np.random.default_rng(99))
+    y2 = apply_mic(x, clip_prob=0.5, rng=np.random.default_rng(99))
+
+    assert np.array_equal(y1, y2)

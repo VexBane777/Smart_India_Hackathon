@@ -17,7 +17,7 @@ def _rms(signal):
     return np.sqrt(np.mean(np.square(signal)))
 
 
-def apply_noise(x, noise_type, snr_db):
+def apply_noise(x, noise_type, snr_db, rng=None):
     """
     Add noise to `x` at the requested SNR (in dB).
 
@@ -27,17 +27,22 @@ def apply_noise(x, noise_type, snr_db):
             of the generated noise.
         snr_db: Target signal-to-noise ratio in dB. E.g. 10 dB means the
             signal power is 10x the noise power.
+        rng: Optional numpy.random.Generator for reproducibility. If not
+            given, a fresh `np.random.default_rng()` is used (the previous,
+            non-reproducible behavior).
 
     Returns:
         numpy array the same length as `x`: signal + scaled noise.
     """
     x = np.asarray(x, dtype=np.float64)
     n = len(x)
+    if rng is None:
+        rng = np.random.default_rng()
 
     if noise_type == "white":
-        noise = np.random.default_rng().standard_normal(n)
+        noise = rng.standard_normal(n)
     elif noise_type == "pink":
-        noise = _pink_noise(n)
+        noise = _pink_noise(n, rng)
     else:
         raise ValueError(f"Unknown noise_type: {noise_type!r}")
 
@@ -52,12 +57,14 @@ def apply_noise(x, noise_type, snr_db):
     return x + noise
 
 
-def _pink_noise(n):
+def _pink_noise(n, rng=None):
     """
     Generate approximate pink (1/f) noise of length `n` via spectral
     shaping of white noise in the frequency domain.
     """
-    white = np.fft.rfft(np.random.default_rng().standard_normal(n))
+    if rng is None:
+        rng = np.random.default_rng()
+    white = np.fft.rfft(rng.standard_normal(n))
     freqs = np.arange(1, len(white) + 1)
     pink_spectrum = white / np.sqrt(freqs)
     pink = np.fft.irfft(pink_spectrum, n)
