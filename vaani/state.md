@@ -1,7 +1,7 @@
 # Project State: VAANI Documentation Suite
 
 ## Current Status
-- **Phase**: Module B Week-1 slice implemented (registry, TinyCNN, basic trainer)
+- **Phase**: Module B Week-1 slice + Task 3 (SSL Teacher) implemented
 - **Goal**: Execute implementation plans.
 - **Last Updated**: 2026-09-05
 
@@ -107,3 +107,27 @@
   `registry.py`'s module docstring and `ssl_head.py`'s module docstring for the full
   writeup. Deliberate for Task 3's brief ("freeze the SSL feature extractor"); revisiting
   the freeze scope is a decision for whoever does real teacher training (Task 5+).
+
+## Module B Task 3 (SSL Teacher) implemented (2026-09-05)
+- `vaani/models/ssl_head.py::SSLHead` wraps the real `facebook/wav2vec2-base`
+  checkpoint (`transformers.Wav2Vec2Model`, loaded lazily inside `__init__` so
+  `import transformers` isn't a side effect of every `registry.load()` call),
+  registered as `"ssl_head"` (config `configs/ssl_teacher.yaml` has `type: ssl_head`).
+  A learnable softmax-normalized layer-weight vector `w` (sized to
+  `num_hidden_layers + 1` at construction time, not hardcoded) mixes the
+  checkpoint's hidden states before a 768→256→2 MLP head. Feature extractor is
+  frozen (`requires_grad=False`, `no_grad()`) and pinned in `.eval()` even under
+  `model.train()` (a `train()` override prevents SpecAugment/dropout from
+  reactivating during training).
+- Built via superpowers:subagent-driven-development in worktree
+  `vaani-module-b-ssl` (branched off `vaani`): 1 task + task review (approved
+  clean) + final whole-branch review (1 Critical + 4 Important findings) + one
+  fix wave + scoped re-review (all addressed, no new breakage). Fast-forward
+  merged into `vaani` at `9e54522`. 209/209 tests passing after merge.
+- The final whole-branch review caught real cross-cutting issues a task-scoped
+  review missed by construction (see known-gaps entries above for the two that
+  remain as documented, deliberate gaps: waveform-vs-mel input mismatch with
+  `train.py`, and the inert `freeze:`/fine-tune config block). The train-mode
+  SpecAugment leak (teacher silently nondeterministic under `model.train()`)
+  and a hardcoded hidden-state count (crash on non-12-layer bases) were both
+  fixed, not just documented.
