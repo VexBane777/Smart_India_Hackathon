@@ -1,9 +1,9 @@
 # Project State: VAANI Documentation Suite
 
 ## Current Status
-- **Phase**: Implementation Ready (Paused)
+- **Phase**: Module B Week-1 slice implemented (registry, TinyCNN, basic trainer)
 - **Goal**: Execute implementation plans.
-- **Last Updated**: 2026-09-04
+- **Last Updated**: 2026-09-05
 
 ## Progress Tracking
 - [x] Explore project context
@@ -61,3 +61,34 @@
   necessarily hand-edits. Before further changes, decide whether to reconstruct the
   generator (and re-apply these edits as data in it) or drop the "generated" framing and
   treat these files as the source of truth going forward.
+
+## Module B Week-1 slice implemented (2026-09-05)
+- Scope: Tasks 1 (`registry.py` + `configs/*.yaml`), 2 (`models/cnn.py::TinyCNN`), and
+  Task 4 Step 1 only (`train.py`'s basic training loop) from
+  `docs/superpowers/plans/2026-09-04-vaani-module-b-model.md`. Tasks 3 (SSL Teacher),
+  5-10, and Task 4 Steps 2-4 (distillation, MLflow, HF Hub sync) are **not** implemented
+  — deferred for lack of GPU/HF Hub access in that session; user chose this scope
+  explicitly over fuller CPU-feasible or full-10-task alternatives.
+- Built via superpowers:subagent-driven-development in worktree `vaani-module-b`
+  (branched off `vaani`), 3 tasks + 2 fix rounds + a final whole-branch review + one
+  final fix wave, all reviewed clean. Fast-forward merged into `vaani` at `d3e0f1e`.
+  187/187 tests passing on `vaani` after merge.
+- `registry.load()` now requires importing `models` before lookups resolve — fixed a
+  real bug where it silently failed from a clean process (only worked before because
+  test files happened to import the model module first). Config merge is a deep/
+  recursive merge, not shallow.
+- **Known deviations from `DOC2_TRAINING_CONFIGS.md`/`TDD_MOD_B_01`**, documented in
+  `registry.py`'s module docstring: `type` is hoisted to the config's top level (spec
+  has it nested under `model:`); `audio.sr`/`win_s` renamed to `sample_rate`/
+  `window_seconds`; `features.hop` renamed to `hop_length`.
+- **Known gaps, deferred (not bugs — tracked for whoever picks up Module B next):**
+  `train.py`'s training loop is dataset-agnostic (takes pre-built DataLoaders, not a
+  manifest-backed AudioDataset — none exists yet, no real audio corpus is present under
+  `data/`, and `torchaudio` isn't installed, only `librosa`/`soundfile`); it also doesn't
+  consume `cnn_week1.yaml`'s `optim` block (hardcodes Adam/lr/epochs as kwargs); the
+  config schema's `${name}` interpolation, `ckpt.every_steps`/`keep_last`, and the whole
+  `tracking:` block are unimplemented (noted in `base.yaml` and `train.py`); no shape/chs
+  validation on `TinyCNN`; `register_model` silently overwrites on duplicate keys;
+  checkpoint format is `state_dict`-only, not the richer resume payload DOC2 §2.3
+  specifies. None of these block Module B's Week-1 scope; they matter once Tasks 3/5-10
+  or a real training run start.
