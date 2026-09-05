@@ -1,0 +1,25 @@
+# SSL Teacher configuration - accuracy ceiling (5050, overnight)
+type: ssl_head
+
+name: ssl_teacher
+
+model:
+  base: facebook/wav2vec2-base
+  layers: 12
+
+optim:
+  opt: adamw
+  lr: 1.0e-5
+  epochs: 10
+  batch: 8
+  accum: 2
+  bfloat16: true
+  grad_checkpointing: true
+
+freeze:
+  - feature_extractor
+
+hardware:
+  gpu: rtx5050
+  vram_gb: 8
+  hours: overnight

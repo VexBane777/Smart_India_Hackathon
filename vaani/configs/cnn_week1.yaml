@@ -1,0 +1,20 @@
+# CNN Week 1 configuration - fallback model, built Monday, never deleted
+type: tinycnn
+
+name: cnn_week1
+
+model:
+  channels: [32, 64, 128, 256]
+  dropout: 0.2
+
+optim:
+  opt: adamw
+  lr: 3.0e-4
+  sched: cosine
+  epochs: 20
+  batch: 256
+  clip: 5.0
+
+hardware:
+  gpu: any
+  vram_gb: 2

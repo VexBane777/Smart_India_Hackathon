@@ -1,0 +1,22 @@
+# Student Distillation configuration - deployable model (4050 #2)
+type: tinycnn
+
+name: student_v1
+
+model:
+  channels: [64, 128, 256, 256]
+
+distill:
+  teacher_logits_cache: runs/ssl_teacher/logits_cache.parquet
+  temperature: 2.0
+  alpha: 0.5  # loss = alpha*CE + (1-alpha)*T^2*KL
+
+optim:
+  opt: adamw
+  lr: 3.0e-4
+  epochs: 30
+  batch: 256
+
+hardware:
+  gpu: rtx4050_2
+  vram_gb: 4

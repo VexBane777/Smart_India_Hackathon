@@ -1,0 +1,37 @@
+# Base configuration shared across all training runs
+# This defines the common audio processing parameters and default settings
+
+seed: 42
+
+# Audio processing specifications
+audio:
+  sample_rate: 16000      # Samples per second (Hz)
+  window_seconds: 2.0     # Audio window duration in seconds
+  hop_seconds: 0.5        # Hop duration between windows in seconds
+
+# Feature extraction parameters
+features:
+  n_mels: 64              # Number of mel-frequency bins
+  n_fft: 512              # FFT size
+  hop_length: 160         # Hop length for STFT (samples)
+  fmin: 20                # Minimum frequency (Hz)
+  fmax: 8000              # Maximum frequency (Hz)
+
+# Data loading configuration
+data:
+  manifest: data/manifests/train.parquet
+  val: data/manifests/val.parquet
+  group_split_col: source_clip    # Leakage-safe split column
+  on_the_fly_aug: [time_shift, gain_jitter, freq_mask, time_mask]
+
+# Checkpoint configuration
+ckpt:
+  dir: runs/${name}
+  hub_repo: vaani/models/${name}  # Auto-push to HuggingFace Hub
+  every_steps: 500
+  keep_last: 3
+
+# Experiment tracking
+tracking:
+  mlflow_uri: "http://master:5000"
+  experiment: vaani
