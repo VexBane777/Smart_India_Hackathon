@@ -92,3 +92,18 @@
   checkpoint format is `state_dict`-only, not the richer resume payload DOC2 §2.3
   specifies. None of these block Module B's Week-1 scope; they matter once Tasks 3/5-10
   or a real training run start.
+- **`SSLHead` (Task 3) takes raw waveform, `train.py`/`TinyCNN` assume mel spectrograms**:
+  `SSLHead.forward` expects `(B, num_samples)` waveform while `train.py`'s documented
+  data contract and `TinyCNN.forward` expect `(B, 1, n_mels, T)` mel tensors (both models
+  now declare this via an `input_kind` class attribute -- `"waveform"` vs. `"mel"` -- for
+  callers to branch on). `registry.load("ssl_teacher")` therefore cannot be dropped into
+  `train.py` as-is; whoever wires Task 4 Step 2+ or Task 5 needs to either branch
+  `train.py` on `input_kind` or give `SSLHead` its own training entry point.
+- **`configs/ssl_teacher.yaml`'s `freeze:`/fine-tune settings are inert** (same class of
+  gap as the `optim:`/`tracking:` blocks above): `freeze: [feature_extractor]` (HF idiom:
+  conv front-end only) and `bfloat16`/`grad_checkpointing`/`accum` are read by nobody --
+  `SSLHead` unconditionally freezes the entire wav2vec2 backbone via `no_grad()`,
+  making it a ~0.2%-trainable linear probe regardless of what the config says. See
+  `registry.py`'s module docstring and `ssl_head.py`'s module docstring for the full
+  writeup. Deliberate for Task 3's brief ("freeze the SSL feature extractor"); revisiting
+  the freeze scope is a decision for whoever does real teacher training (Task 5+).

@@ -20,6 +20,21 @@ Config schema deviation from the docs (intentional, not a bug):
     were kept; the doc files themselves are left as-is (not updated) -- this
     note exists so a future reader comparing code to docs doesn't mistake
     the difference for an implementation bug.
+
+Config schema deviation: `ssl_head`'s `freeze:` block is inert:
+
+    `configs/ssl_teacher.yaml`'s `freeze: [feature_extractor]` uses the HF
+    idiom for that name -- the conv front-end only
+    (`Wav2Vec2Model.feature_extractor`) -- but `models/ssl_head.py::SSLHead`
+    reads no `freeze:` key at all: it unconditionally freezes the *entire*
+    backbone (`requires_grad = False` on every `Wav2Vec2Model` parameter,
+    plus a hard `torch.no_grad()` around it in `forward()`), which is
+    strictly more than the config asks for and cannot be loosened by
+    editing the config. Similarly, the config's fine-tune-oriented `optim`
+    settings (`bfloat16`, `grad_checkpointing`, `accum`) are not consumed
+    by anything -- analogous to the already-noted-elsewhere inert
+    `ckpt`/`tracking` blocks in `base.yaml`. See `ssl_head.py`'s module
+    docstring for the full rationale and `state.md`'s known-gaps list.
 """
 
 from pathlib import Path

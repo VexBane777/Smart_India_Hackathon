@@ -21,6 +21,14 @@ class TinyCNN(nn.Module):
     Accepts input audio spectrograms of shape (Batch, 1, n_mels, time_frames)
     and produces logits of shape (Batch, 2).
 
+    `input_kind = "mel"` (class attribute) declares this model's input
+    contract explicitly -- as opposed to `SSLHead`'s `"waveform"` -- since
+    the two registry-loadable models are interchangeable only at
+    construction time, not at call time: a caller passing raw waveforms to
+    `TinyCNN`, or mel spectrograms to `SSLHead`, will fail at the first
+    forward pass. See `state.md`'s known-gaps list for the corresponding
+    `train.py` gap.
+
     Args:
         config: Either a config dict (from registry.load()) or None.
                 When config is a dict, n_mels, channels, and dropout are
@@ -33,6 +41,8 @@ class TinyCNN(nn.Module):
                 the final Linear layer (default: 0.0, i.e. no dropout). Only
                 used if config is None.
     """
+
+    input_kind: str = "mel"
 
     def __init__(
         self,
