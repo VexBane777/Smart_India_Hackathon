@@ -28,3 +28,6 @@ venv/
 
 # Superpowers SDD scratch workspace (git-ignored per skill)
 .superpowers/
+
+# Superpowers worktree fallback
+.worktrees/
