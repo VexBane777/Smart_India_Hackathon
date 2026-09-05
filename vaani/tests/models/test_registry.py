@@ -8,6 +8,8 @@ Tests cover:
 4. Error handling (missing files, invalid configs)
 """
 
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict
@@ -292,6 +294,78 @@ def test_load_config_uses_default_configs_dir():
     assert config["type"] == "tinycnn"
     assert config["name"] == "cnn_week1"
     assert config["seed"] == 42  # From base.yaml
+
+
+def test_config_merge_is_deep_preserves_sibling_keys(temp_configs_dir):
+    """Test that overriding one key inside a nested block preserves its siblings.
+
+    Regression test for the shallow-merge bug: a naive
+    {**base_config, **model_config} merge replaces the ENTIRE top-level
+    "features" dict when the specific config overrides just one key inside
+    it (e.g. n_mels), silently dropping base.yaml's other features.* keys
+    (n_fft, hop_length, fmin, fmax). The merge must instead be recursive so
+    those sibling keys survive.
+    """
+    import yaml
+
+    override_config = {
+        "type": "deep_merge_test",
+        "name": "deep_merge_v1",
+        "features": {
+            "n_mels": 999,  # Override just this one nested key
+        },
+    }
+
+    with open(temp_configs_dir / "deep_merge_test.yaml", "w") as f:
+        yaml.dump(override_config, f)
+
+    config = load_config("deep_merge_test", str(temp_configs_dir))
+
+    # The overridden leaf value should win.
+    assert config["features"]["n_mels"] == 999
+
+    # Every sibling key in the same nested block must survive from base.yaml,
+    # unchanged -- a shallow merge would drop all of these.
+    assert config["features"]["n_fft"] == 512
+    assert config["features"]["hop_length"] == 160
+    assert config["features"]["fmin"] == 20
+    assert config["features"]["fmax"] == 8000
+
+
+def test_registry_load_from_clean_subprocess():
+    """Regression test: registry.load() must work from a clean process.
+
+    Prior bug: registry.py never imported the `models` package, so
+    `@register_model` (an import-time side effect in models/cnn.py) never
+    fired unless the caller had already imported `models`/`models.cnn`
+    first. Every existing test happened to pass only because the test
+    files themselves import `models`/`models.cnn` before calling
+    `registry.load()` -- a same-process test cannot catch this class of
+    bug, since importing `registry` in the same interpreter as the rest of
+    this test module leaves MODEL_REGISTRY already populated by earlier
+    imports. Running in a genuinely separate subprocess is required.
+    """
+    vaani_dir = Path(__file__).resolve().parents[2]
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.path.insert(0, '.'); import registry; "
+            "m = registry.load('cnn_week1'); "
+            "print(type(m).__name__)",
+        ],
+        cwd=str(vaani_dir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (
+        f"registry.load('cnn_week1') failed in a clean subprocess.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "TinyCNN" in result.stdout
 
 
 def test_load_config_bare_name_vs_full_path(temp_configs_dir):

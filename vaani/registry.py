@@ -3,6 +3,23 @@ Model Registry and Configuration System
 
 Provides a central registry for model classes and a configuration loader that
 merges model-specific configs with shared base defaults.
+
+Config schema deviation from the docs (intentional, not a bug):
+
+    The config schema actually implemented here/in vaani/configs/*.yaml is
+    the canonical one for this codebase. It intentionally differs from the
+    schema shown in vaani/TDDs/TDD_MOD_B_01_Models.md and
+    vaani/DOC2_TRAINING_CONFIGS.md in these ways:
+
+      - `type` is a top-level config key (the docs nest it under `model.type`).
+      - `audio.sr` / `audio.win_s` (docs) are `audio.sample_rate` /
+        `audio.window_seconds` here.
+      - `features.hop` (docs) is `features.hop_length` here.
+
+    These renames/restructuring were judged clearer than the doc spec and
+    were kept; the doc files themselves are left as-is (not updated) -- this
+    note exists so a future reader comparing code to docs doesn't mistake
+    the difference for an implementation bug.
 """
 
 from pathlib import Path
@@ -13,6 +30,27 @@ import yaml
 
 # Global model registry: maps model type names to their class constructors
 MODEL_REGISTRY: Dict[str, Type] = {}
+
+
+def _ensure_models_imported() -> None:
+    """
+    Make sure model modules that register themselves via `@register_model`
+    have actually been imported before we look anything up in
+    MODEL_REGISTRY.
+
+    Without this, `registry.load(...)` only works by accident: it depends on
+    the caller having already imported `models`/`models.cnn` (an import-time
+    side effect that populates MODEL_REGISTRY) before calling `load()`. From
+    a clean process where nothing has imported `models` yet, `load()` would
+    otherwise fail with "Model type '...' not found in MODEL_REGISTRY.
+    Available types: []" even for a perfectly valid, registered model type.
+
+    This is a lazy import (done here, not at module load time) specifically
+    to avoid an import cycle: `models/cnn.py` imports `register_model` from
+    this module, so `registry.py` cannot import `models` at the top of the
+    file.
+    """
+    import models  # noqa: F401  (import side effect: registers models)
 
 
 def register_model(name: str):
@@ -87,10 +125,34 @@ def load_config(config_path: str, configs_dir: Optional[str] = None) -> Dict[str
     with open(actual_config_path, "r") as f:
         model_config = yaml.safe_load(f) or {}
 
-    # Merge: model config overrides base config
-    merged_config = {**base_config, **model_config}
+    # Merge: model config overrides base config, recursively. A shallow
+    # {**base_config, **model_config} would silently drop every sibling key
+    # in a nested block (e.g. base.yaml's features.n_fft/hop_length/...)
+    # whenever the specific config overrides just one key in that same
+    # block (e.g. features.n_mels) -- since base.yaml is entirely nested
+    # blocks, that's not an acceptable merge semantics for this schema.
+    merged_config = _deep_merge(base_config, model_config)
 
     return merged_config
+
+
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively merge `override` into `base`, returning a new dict.
+
+    - For keys present in both where both values are dicts, merge recursively
+      (so sibling keys at every nesting level are preserved from `base`).
+    - Otherwise, `override`'s value wins (including replacing a non-dict
+      base value with a dict, or vice versa).
+    """
+    merged: Dict[str, Any] = dict(base)
+    for key, override_value in override.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(override_value, dict):
+            merged[key] = _deep_merge(base_value, override_value)
+        else:
+            merged[key] = override_value
+    return merged
 
 
 def load(config_path: str, configs_dir: Optional[str] = None) -> Any:
@@ -116,6 +178,8 @@ def load(config_path: str, configs_dir: Optional[str] = None) -> Any:
         raise KeyError(f"Config must specify a 'type' field naming the model registry key")
 
     model_type = config["type"]
+
+    _ensure_models_imported()
 
     if model_type not in MODEL_REGISTRY:
         raise ValueError(

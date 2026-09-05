@@ -9,8 +9,26 @@ produced by `registry.load(config)`) against already-constructed
 `torch.utils.data.DataLoader`s.
 
 Scope note: this implements Step 1 ("basic training loop") of the Module B
-Task 4 plan only. Distillation loss, MLflow logging, and HF Hub sync are
-explicitly out of scope for this slice and are NOT implemented here.
+Task 4 plan only. The following are explicitly out of scope for this slice
+and are NOT implemented here or anywhere else in the repo yet:
+
+  - Distillation loss.
+  - MLflow logging.
+  - HF Hub sync.
+  - Consuming `cnn_week1.yaml`'s `optim` block (opt/lr/sched/epochs/batch/
+    clip). `train()` is dataset-agnostic and config-agnostic by design (see
+    above) -- it hardcodes the Adam optimizer and takes `lr`/`epochs` as
+    plain keyword arguments rather than reading a config object, so nothing
+    in `optim:` is currently read by this module.
+  - `base.yaml`'s `${name}`-style string interpolation (e.g. in
+    `ckpt.dir` / `ckpt.hub_repo`) -- no template-resolution step exists
+    anywhere, so those values would need to be interpolated by the caller.
+  - `base.yaml`'s `ckpt.every_steps` / `ckpt.keep_last` -- `train()` saves a
+    single checkpoint once, at the very end of training (if
+    `checkpoint_path` is given), not periodically every N steps, and does
+    not rotate/keep a bounded number of checkpoints.
+  - `base.yaml`'s entire `tracking:` block (`mlflow_uri`, `experiment`) --
+    unused; see MLflow logging above.
 
 Expected data contract:
     Each DataLoader yields batches of `(mel_tensor, label)` where:

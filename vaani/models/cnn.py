@@ -23,11 +23,15 @@ class TinyCNN(nn.Module):
 
     Args:
         config: Either a config dict (from registry.load()) or None.
-                When config is a dict, n_mels and channels are extracted from it.
+                When config is a dict, n_mels, channels, and dropout are
+                extracted from it.
                 When config is None, they default to the provided keyword arguments.
         n_mels: Number of mel-frequency bins (default: 64). Only used if config is None.
         chs: Tuple of channel dimensions for each block (default: (32, 64, 128, 256)).
              Only used if config is None.
+        dropout: Dropout probability applied in the classification head, before
+                the final Linear layer (default: 0.0, i.e. no dropout). Only
+                used if config is None.
     """
 
     def __init__(
@@ -35,6 +39,7 @@ class TinyCNN(nn.Module):
         config: Union[Dict[str, Any], None] = None,
         n_mels: int = 64,
         chs: Tuple[int, ...] = (32, 64, 128, 256),
+        dropout: float = 0.0,
     ):
         super().__init__()
 
@@ -47,9 +52,12 @@ class TinyCNN(nn.Module):
             # Extract channels from config.model.channels
             channels_list = config.get("model", {}).get("channels", chs)
             chs = tuple(channels_list)
+            # Extract dropout probability from config.model.dropout
+            dropout = config.get("model", {}).get("dropout", dropout)
 
         self.n_mels = n_mels
         self.chs = chs
+        self.dropout = dropout
         in_channels = 1  # Spectrogram has 1 channel
 
         # Build 4 convolutional blocks: Conv2d → BN → GELU → MaxPool
@@ -74,8 +82,13 @@ class TinyCNN(nn.Module):
         # Adaptive average pool to (out_channels, 1, 1)
         self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
 
-        # Linear head: from last channel count to 2 logits (binary classification)
-        self.head = nn.Linear(chs[-1], 2)
+        # Classification head: Dropout (regularization) -> Linear to 2 logits
+        # (binary classification). Dropout is a no-op at p=0.0 (the default
+        # when neither config nor a keyword argument supplies one).
+        self.head = nn.Sequential(
+            nn.Dropout(p=dropout),
+            nn.Linear(chs[-1], 2),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

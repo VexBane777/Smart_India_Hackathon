@@ -232,6 +232,30 @@ def test_tinycnn_is_trainable():
     assert params_changed, "Model parameters did not update during training"
 
 
+def test_tinycnn_head_has_dropout_from_config():
+    """Test that TinyCNN's head includes a Dropout layer using the config value.
+
+    cnn_week1.yaml declares model.dropout: 0.2, but the classification head
+    used to be a bare nn.Linear with no Dropout at all -- i.e. a config key
+    that lied about actual model behavior. Loading via the registry from
+    cnn_week1.yaml must produce a model whose head actually applies dropout
+    with the configured probability.
+    """
+    model = load("cnn_week1")
+
+    dropout_layers = [m for m in model.head.modules() if isinstance(m, nn.Dropout)]
+    assert len(dropout_layers) == 1, "Expected exactly one Dropout layer in the head"
+    assert dropout_layers[0].p == 0.2
+
+
+def test_tinycnn_head_dropout_defaults_to_zero_without_config():
+    """Test that TinyCNN's head has a (no-op) Dropout(p=0.0) when unconfigured."""
+    model = TinyCNN()
+    dropout_layers = [m for m in model.head.modules() if isinstance(m, nn.Dropout)]
+    assert len(dropout_layers) == 1
+    assert dropout_layers[0].p == 0.0
+
+
 def test_tinycnn_output_is_float():
     """Test that TinyCNN outputs are float32 tensors."""
     model = TinyCNN()
