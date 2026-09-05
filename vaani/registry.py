@@ -5,7 +5,6 @@ Provides a central registry for model classes and a configuration loader that
 merges model-specific configs with shared base defaults.
 """
 
-import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Type
 
@@ -37,7 +36,11 @@ def load_config(config_path: str, configs_dir: Optional[str] = None) -> Dict[str
 
     Args:
         config_path: Either a bare config name (e.g., "cnn_week1") or a full/relative
-                    path to a YAML file. Bare names are resolved relative to configs_dir.
+                    path to a YAML file.
+                    - Bare names (no directory separators, no extension) are resolved
+                      relative to configs_dir (e.g., "cnn_week1" → configs_dir/cnn_week1.yaml)
+                    - Absolute paths are used as-is.
+                    - Relative paths are used as-is, relative to the current working directory.
         configs_dir: Directory containing config files. Defaults to 'configs/' relative
                     to this module.
 
@@ -56,21 +59,18 @@ def load_config(config_path: str, configs_dir: Optional[str] = None) -> Dict[str
     configs_dir = Path(configs_dir)
 
     # Determine the actual config path
-    config_path_obj = Path(config_path)
+    def is_bare_name(path: str) -> bool:
+        """Check if path is a bare name (no directory separators, no file extension)."""
+        has_separators = "/" in path or "\\" in path
+        has_extension = path.endswith(".yaml") or path.endswith(".yml")
+        return not has_separators and not has_extension
 
-    # If it's a bare name (no slashes, no extension), resolve it
-    if not ("/" in config_path and not config_path.startswith("/")) and \
-       not ("\\" in config_path) and \
-       not config_path.endswith(".yaml") and \
-       not config_path.endswith(".yml"):
+    if is_bare_name(config_path):
         # Bare name: resolve to configs_dir/name.yaml
         actual_config_path = configs_dir / f"{config_path}.yaml"
     else:
-        # Full or relative path: use as-is, but resolve relative to configs_dir if not absolute
-        if not config_path_obj.is_absolute():
-            actual_config_path = configs_dir / config_path_obj
-        else:
-            actual_config_path = config_path_obj
+        # Full or relative path: use as-is (absolute or relative to current working directory)
+        actual_config_path = Path(config_path)
 
     # Load base config
     base_config_path = configs_dir / "base.yaml"

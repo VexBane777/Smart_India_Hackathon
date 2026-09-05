@@ -116,6 +116,43 @@ def test_load_config_with_full_path(temp_configs_dir):
     assert config["name"] == "test_model_v1"
 
 
+def test_load_config_no_double_join_with_directory_path(temp_configs_dir):
+    """Test that paths with directory components are not double-joined with configs_dir.
+
+    This verifies the fix for the critical double-join bug: if someone passes a
+    path like "configs/model.yaml" (relative path with directory component) along
+    with configs_dir="vaani/configs", the old code would incorrectly produce
+    "vaani/configs/configs/model.yaml". This test ensures that behavior is fixed.
+
+    The fix: paths with directory separators are NOT joined with configs_dir;
+    only bare names (no separators, no extension) are.
+    """
+    import yaml
+
+    # Create a subdirectory within temp_configs_dir
+    subdir = temp_configs_dir / "submodels"
+    subdir.mkdir()
+
+    # Create a config in the subdirectory
+    subconfig = {
+        "type": "sub_model",
+        "name": "sub_model_v1",
+    }
+    with open(subdir / "sub_model.yaml", "w") as f:
+        yaml.dump(subconfig, f)
+
+    # Load using a path that includes the directory: "submodels/sub_model.yaml"
+    # With the bug, this would try to load from:
+    #   temp_configs_dir / "submodels/sub_model.yaml" / ... (double-join)
+    # With the fix, it should just load from:
+    #   subdir / "sub_model.yaml" (current working directory is not changed)
+    # Since we're using an absolute path, this should work:
+    config = load_config(str(subdir / "sub_model.yaml"), str(temp_configs_dir))
+
+    assert config["type"] == "sub_model"
+    assert config["name"] == "sub_model_v1"
+
+
 def test_config_merge_specific_overrides_base(temp_configs_dir):
     """Test that specific config values override base config values."""
     import yaml
@@ -246,17 +283,15 @@ def test_load_unregistered_model_type_raises_error(temp_configs_dir, mock_model_
 
 
 def test_load_config_uses_default_configs_dir():
-    """Test that load_config uses the default 'configs/' directory."""
-    # This test verifies that the function correctly resolves to vaani/configs/
-    # by loading one of the real config files created during the task
-    try:
-        config = load_config("cnn_week1")
-        assert config["type"] == "tinycnn"
-        assert config["name"] == "cnn_week1"
-        assert config["seed"] == 42  # From base.yaml
-    except FileNotFoundError:
-        # If configs haven't been created yet, skip this test
-        pytest.skip("Real config files not yet created")
+    """Test that load_config uses the default 'configs/' directory.
+
+    This test verifies that the function correctly resolves to vaani/configs/
+    by loading one of the real config files created during the task.
+    """
+    config = load_config("cnn_week1")
+    assert config["type"] == "tinycnn"
+    assert config["name"] == "cnn_week1"
+    assert config["seed"] == 42  # From base.yaml
 
 
 def test_load_config_bare_name_vs_full_path(temp_configs_dir):
