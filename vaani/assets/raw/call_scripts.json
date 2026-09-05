@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "description": "VAANI demo call scripts (Doc 4 §4.2) - source of truth for Task 1 placeholder assembly and future real recordings.",
+  "sample_rate": 48000,
+  "gap_between_turns_ms": [100, 300],
+  "peak_target_dbfs": -6,
+  "calls": {
+    "call_A": {
+      "description": "Primary scam call: employee (real) + CFO (clone slot). Doc 4 §4.2.",
+      "accent": "hi-en",
+      "segments": [
+        {"id": "A1", "speaker": "employee", "start_s": 0.0, "end_s": 22.0,
+         "voice": "s1", "text": "Hello? Haan bolo... vendor payment? Aaj hi nikalna hai? Theek hai, main dekh leta hoon... have you told sir? Okay, put him on."},
+        {"id": "A2", "speaker": "cfo", "start_s": 22.0, "end_s": 55.0,
+         "voice": "s2_clone", "text": "Namaste. I'll be quick - I'm in a board meeting. We need the Q2 vendor settlement released today. Forty lakh. New remittance account - details on WhatsApp. Please don't loop in accounts, I've cleared it with audit. Confidential until the announcement."},
+        {"id": "A3", "speaker": "employee", "start_s": 55.0, "end_s": 70.0,
+         "voice": "s1", "text": "Okay... but sir, normally these go through the portal? Should I at least mark finance?"},
+        {"id": "A4", "speaker": "cfo", "start_s": 70.0, "end_s": 90.0,
+         "voice": "s2_clone", "text": "No time for the portal. I'm authorizing verbally - you know my voice. Do it now, I'll confirm by email tonight."}
+      ]
+    },
+    "call_N": {
+      "description": "Identical script, control: CFO lines in donor's REAL voice. Doc 4 §4.6.",
+      "accent": "hi-en",
+      "segments": [
+        {"id": "N1", "speaker": "employee", "start_s": 0.0, "end_s": 22.0,
+         "voice": "s1", "text": "Hello? Haan bolo... vendor payment? Aaj hi nikalna hai? Theek hai, main dekh leta hoon... have you told sir? Okay, put him on."},
+        {"id": "N2", "speaker": "cfo", "start_s": 22.0, "end_s": 55.0,
+         "voice": "s2_real", "text": "Namaste. I'll be quick - I'm in a board meeting. We need the Q2 vendor settlement released today. Forty lakh. New remittance account - details on WhatsApp. Please don't loop in accounts, I've cleared it with audit. Confidential until the announcement."},
+        {"id": "N3", "speaker": "employee", "start_s": 55.0, "end_s": 70.0,
+         "voice": "s1", "text": "Okay... but sir, normally these go through the portal? Should I at least mark finance?"},
+        {"id": "N4", "speaker": "cfo", "start_s": 70.0, "end_s": 90.0,
+         "voice": "s2_real", "text": "No time for the portal. I'm authorizing verbally - you know my voice. Do it now, I'll confirm by email tonight."}
+      ]
+    },
+    "call_B": {
+      "description": "Accent variant: different pair, Tamil-English script shape. Doc 4 §4.6.",
+      "accent": "ta-en",
+      "segments": [
+        {"id": "B1", "speaker": "employee", "start_s": 0.0, "end_s": 22.0,
+         "voice": "s1", "text": "Hello? Vanakkam... vendor payment ah? Today itself we have to send? OK, I will check... have you told sir? Okay, put him on the line."},
+        {"id": "B2", "speaker": "cfo", "start_s": 22.0, "end_s": 55.0,
+         "voice": "s2_clone", "text": "Namaste. I'll be quick - I'm in a board meeting. We need the Q2 vendor settlement released today. Forty lakh. New remittance account - details on WhatsApp. Please don't loop in accounts, I've cleared it with audit. Confidential until the announcement."},
+        {"id": "B3", "speaker": "employee", "start_s": 55.0, "end_s": 70.0,
+         "voice": "s1", "text": "Okay... but sir, normally these go through the portal ah? Should I at least mark finance?"},
+        {"id": "B4", "speaker": "cfo", "start_s": 70.0, "end_s": 90.0,
+         "voice": "s2_clone", "text": "No time for the portal. I'm authorizing verbally - you know my voice. Do it now, I'll confirm by email tonight."}
+      ]
+    }
+  }
+}

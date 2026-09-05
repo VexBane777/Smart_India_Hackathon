@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "status": "tags-mapped-values-pending",
+  "note": "Module C Task 7 Step 2. Maps every deck number to its source artifact. Values are filled in Step 3 only after Module B's final runs produce these artifacts. Gate (Doc 3 §3.5): any [M] still unfilled = the slide is not ready.",
+  "slides": {
+    "S2": {
+      "arup_25m_usd": {
+        "source": "named dated news source (URL to be recorded in appendix)",
+        "status": "external-fact, needs URL verification"
+      },
+      "indian_advisory": {
+        "source": "dated Indian regulatory advisory (insert only after confirming source)",
+        "status": "pending-verification"
+      }
+    },
+    "S5_S6": {
+      "first_score_latency_s": {
+        "tag": "[M]",
+        "source": "runs/<model>/latency.json",
+        "status": "pending-module-B"
+      },
+      "per_window_compute_ms_cpu": {
+        "tag": "[M]",
+        "source": "runs/<model>/latency.json",
+        "status": "pending-module-B"
+      }
+    },
+    "S7": {
+      "eer_x5_protocols": {
+        "tag": "[M]",
+        "source": "MLflow finals + leaderboard.md",
+        "status": "pending-module-B"
+      },
+      "fpr_at_tpr90": {
+        "tag": "[M]",
+        "source": "MLflow finals + leaderboard.md",
+        "status": "pending-module-B"
+      },
+      "ece": {
+        "tag": "[M]",
+        "source": "calibration report",
+        "status": "pending-module-B"
+      },
+      "three_seed_std": {
+        "tag": "[M]",
+        "source": "leaderboard.md",
+        "status": "pending-module-B"
+      }
+    },
+    "S7_S10": {
+      "pi5_p95_latency_ms": {
+        "tag": "[M]",
+        "source": "Pi bench log",
+        "status": "pending-module-B+ops"
+      }
+    },
+    "S8": {
+      "cutoff_match": {
+        "tag": "[M]",
+        "source": "fingerprint_validate.py output",
+        "status": "pending-module-A-validation"
+      },
+      "ltas_correlation": {
+        "tag": "[M]",
+        "source": "fingerprint_validate.py output",
+        "status": "pending-module-A-validation"
+      }
+    }
+  }
+}

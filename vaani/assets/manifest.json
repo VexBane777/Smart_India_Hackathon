@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "generated_on": "2026-09-05",
+  "generator": "assets/scripts/build_demo_placeholders.py",
+  "provenance": "placeholder_tts",
+  "warning": "PLACEHOLDER audio for parallel development only. Real recording (Doc 4 \u00a74.4) pending: Form A consent gate not yet cleared.",
+  "sample_rate": 48000,
+  "channels": 1,
+  "assets": {
+    "call_A": {
+      "path": "assets/raw/call_A_raw.wav",
+      "script_ref": "assets/raw/call_scripts.json#calls/call_A",
+      "voice_source": "sapi_tts_placeholder",
+      "channel": "raw_48k_mono",
+      "qa": {
+        "duration_s": 90.0,
+        "duration_ok": true,
+        "peak_dbfs": -6.0,
+        "peaks_ok": true,
+        "no_clipping": true,
+        "has_speech": true
+      },
+      "split": "demo"
+    },
+    "call_N": {
+      "path": "assets/raw/call_N_raw.wav",
+      "script_ref": "assets/raw/call_scripts.json#calls/call_N",
+      "voice_source": "sapi_tts_placeholder",
+      "channel": "raw_48k_mono",
+      "qa": {
+        "duration_s": 90.0,
+        "duration_ok": true,
+        "peak_dbfs": -6.0,
+        "peaks_ok": true,
+        "no_clipping": true,
+        "has_speech": true
+      },
+      "split": "demo"
+    },
+    "call_B": {
+      "path": "assets/raw/call_B_raw.wav",
+      "script_ref": "assets/raw/call_scripts.json#calls/call_B",
+      "voice_source": "sapi_tts_placeholder",
+      "channel": "raw_48k_mono",
+      "qa": {
+        "duration_s": 90.0,
+        "duration_ok": true,
+        "peak_dbfs": -6.0,
+        "peaks_ok": true,
+        "no_clipping": true,
+        "has_speech": true
+      },
+      "split": "demo"
+    }
+  }
+}
