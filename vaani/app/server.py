@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from app.engine_mock import HOP_S, SR, MockBackend
+from app.engine_mock import HOP_S, SR, MockBackend, clone_entry_for_call
 
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 RAW_DIR = ASSETS_DIR / "raw"
@@ -66,14 +66,31 @@ def _load_mono_float(path: Path, target_sr: int = SR) -> tuple[np.ndarray, int]:
 
 
 def available_calls() -> dict:
-    """Map call_key -> {"path", "duration_s"} for WAVs in assets/raw."""
+    """
+    Map call_key -> {"path"} for streamable demo audio.
+
+    Prefers the phone-channeled `demo` variant (Module C Task 2:
+    assets/demo/call_*_whatsapp.wav — what a real call actually sounds
+    like) over the clean `raw` recording, since that's what the live demo
+    should stream. Falls back to `raw` if no channeled variant exists yet
+    (e.g. call_B, which Task 2 doesn't channel).
+    """
     calls = {}
     if MANIFEST_PATH.exists():
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
         for key, entry in manifest.get("assets", {}).items():
-            p = ASSETS_DIR.parent / entry["path"]
-            if p.exists():
-                calls[key] = {"path": str(p)}
+            demo_entry = entry.get("demo")
+            path = None
+            if demo_entry:
+                demo_path = ASSETS_DIR.parent / demo_entry["path"]
+                if demo_path.exists():
+                    path = demo_path
+            if path is None:
+                raw_path = ASSETS_DIR.parent / entry["path"]
+                if raw_path.exists():
+                    path = raw_path
+            if path is not None:
+                calls[key] = {"path": str(path)}
         return calls
     # fallback: any *_raw.wav next to this script's asset tree
     for p in sorted(RAW_DIR.glob("call_*_raw.wav")):
@@ -105,7 +122,10 @@ async def stream_call(ws: WebSocket, call_key: str, pace: float = 1.0):
         return
 
     audio, sr = _load_mono_float(Path(calls[call_key]["path"]), SR)
-    backend = MockBackend()
+    # Per-call clone entry (not a hardcoded constant): call_N (control) has
+    # no clone segment at all and must never score high. See
+    # engine_mock.clone_entry_for_call's docstring for the bug this fixes.
+    backend = MockBackend(clone_entry_s=clone_entry_for_call(call_key))
     chunk_n = int(CHUNK_S * SR)
     from app.engine_mock import AlertStateMachine
 

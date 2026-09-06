@@ -1,9 +1,11 @@
 # Project State: VAANI Documentation Suite
 
 ## Current Status
-- **Phase**: Module B Week-1 slice + Task 3 (SSL Teacher) implemented
+- **Phase**: Module B Week-1 slice + Task 3 (SSL Teacher) implemented; Module C
+  fully implemented (all code-buildable tasks; see "Module C implemented per
+  plan" below for what's deliberately still gated/flagged)
 - **Goal**: Execute implementation plans.
-- **Last Updated**: 2026-09-05
+- **Last Updated**: 2026-09-06
 
 ## Progress Tracking
 - [x] Explore project context
@@ -223,6 +225,93 @@ only genuinely CPU-only gaps were closed this session.
       making it strict would break ~5 existing tests for no real benefit,
       so left as-is), and the entire `tracking:`/MLflow block (needs a
       reachable MLflow server — a GPU-rota-machine concern, not CPU-only).
+
+## Module C implemented per plan (2026-09-06)
+
+User asked to "implement Module C fully". Scoped explicitly (user's choice)
+to all code-buildable work, with physical-world-only steps mocked/automated
+or flagged rather than attempted: real human recording + RVC cloning (Task
+1) was already placeholder-only from the prior session and left as-is;
+Task 8's screen-recorded backup video and Task 6's literal "physically pull
+the network cable" step are flagged as needing a human, not attempted.
+
+- **Task 2 (Demo Asset Channeling)**: new `assets/scripts/channel_demo_assets.py`
+  runs `call_A_raw.wav`/`call_N_raw.wav` through `telechannel.pipeline`'s
+  `whatsapp` recipe -> `assets/demo/call_{A,N}_whatsapp.wav` (16kHz mono
+  WAV, not FLAC — plan's own "Files" section names `.wav`, followed that
+  over the "Interfaces" line's FLAC mention). `manifest.json` gets a
+  `demo` sub-entry per call. `server.py`'s `available_calls()` now prefers
+  the channeled variant over raw when present, so the live demo actually
+  streams phone-quality audio.
+  - **Real bug found and fixed**: `server.py`'s `stream_call` hardcoded
+    `MockBackend()` (default `clone_entry_s=22.0`) for every call
+    regardless of `call_key`. `call_N` (Doc 4 §4.6's all-real-voice
+    control) has no clone segment at all, so streaming it through the
+    *actual server* would have falsely spiked risk after 22s — only the
+    existing unit test (which manually passed `clone_entry_s=1e9`) caught
+    the *intended* behavior; the wiring into `server.py` never had it.
+    Fixed via new `engine_mock.clone_entry_for_call(call_key)`, which
+    reads `call_scripts.json`'s per-segment `voice` tags and returns
+    `None` for calls with no `"*_clone"` segment. `MockBackend.clone_entry_s`
+    now accepts `None` (never spikes). Regression tests added in
+    `test_server.py` (`test_call_N_control_never_alerts`,
+    `TestChanneledDemoAssets`).
+- **Task 3 (Demo Cue Generation)**: `assets/scripts/record_cues.py` (CLI:
+  `--call --input --out`) scores an audio file in 2s/0.5s-hop windows via
+  the same mock backend and writes a `{timestamp: score}` JSON cue sheet
+  plus `first_alert_t`/`clone_entry_s` metadata. Deviation from the plan
+  text ("modify vaani.engine") documented in the script's docstring — no
+  `vaani.engine` module exists anywhere in this repo; reused
+  `app.engine_mock` instead (the same swap point Task 4 already
+  established). Generated `assets/demo/call_A_whatsapp.cues.json`
+  (committed); verified `first_alert_t == clone_entry_s == 22.0` matches
+  the script's clone-entry timestamp exactly.
+- **Task 4 (Streamlit UI)**: found already fully implemented by the prior
+  session (Steps 1-4: server, gauge, spectrogram, risk curve) — verified
+  via the existing test suite, no changes needed beyond the Task 2 fix
+  above (which Task 4's UI now benefits from — it streams channeled audio).
+- **Task 5 (Bank Sim + OTP) + hash-chained audit log**: new
+  `app/components/audit_log.py` (`AuditLog`/`AuditEntry`: SHA-256 chain,
+  each entry embeds the previous entry's hash; `verify_chain()` detects
+  tampering and returns the first broken seq) implementing the master
+  plan §1 item 5 / §2 Friday-milestone requirement ("hash-chained decision
+  log... our honest answer to the Blockchain theme") — not explicit in the
+  Module C plan's Task 5 file list, but explicitly named as part of the
+  same Friday bank-sim milestone in `00_MASTER_PLAN.md`, so built alongside
+  it. New `app/components/bank_modal.py`: `decide_transfer_outcome(state)`
+  (pure function: "alert" -> held, anything else -> approved) +
+  `render_bank_panel()` (Initiate Transfer -> HOLD -> simulated OTP entry
+  -> release, or immediate approval if no risk; every transition appended
+  to the audit log; OTP is a disclosed on-screen demo constant, never
+  actually sent anywhere, matching the master plan's "SIMULATED and
+  disclosed" requirement). Wired into `app.py`. Tested via
+  `streamlit.testing.v1.AppTest` (full HOLD->OTP->release and
+  immediate-approval flows) plus pure-function unit tests.
+- **Task 6 (Airplane Mode Verification)**: `tests/demo/test_offline.py`
+  automates the CPU-only slice — monkeypatches `socket.socket.connect`/
+  `connect_ex` to raise on any *non-loopback* connection attempt (loopback
+  allowed: that's how the local demo and the test's own WS transport work,
+  neither is "external"), then runs the full call-A/call-N stream and the
+  bank-sim workflow end-to-end, asserting zero non-loopback connection
+  attempts. Documented in the test's docstring that this does **not**
+  replace a real physical rehearsal (literally disabling WiFi/Ethernet on
+  the demo machine) — that manual pass is out of scope for an autonomous
+  session and still needs a human before the actual pitch.
+- **Task 7 (Pitch Deck)**: Steps 1-2 already done by the prior session
+  (`deck_structure.md`, `lockdown.json`). Step 3 (fill measured values)
+  deliberately left gated/pending — no real Module B training run or
+  measured latency/EER numbers exist yet (no GPU, no real corpus this
+  session either), and inventing placeholder numbers would violate the
+  plan's own Global Constraint ("No estimated numbers"). Not a gap to
+  close later without real measurements.
+- **Task 8 (Final Demo Production)**: not attempted — needs a human to
+  perform and screen-record the actual 90s demo rehearsal. Flagged, not
+  faked.
+- Full suite: **270 passed** (was 220 before this session; +50 across
+  Tasks 2/3/5/6's new tests). Not yet committed — awaiting user's go-ahead
+  per this session's "always confirm before pushing/committing" default.
+
+## Module C: prior-session context (2026-09-05 note, preserved as written)
 - **Module C: confirmed zero code existed at the time this was checked**
   (no FastAPI/Streamlit/bank-sim/audit-log anywhere in the repo) — true as
   of this session's investigation, but a separate parallel session landed

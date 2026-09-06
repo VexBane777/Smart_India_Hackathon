@@ -77,10 +77,48 @@ class TestWebSocketStream:
                 (early if msg["t"] < 20.0 else late).append(msg["raw_score"])
         assert np.mean(late) > np.mean(early) + 0.3
 
+    def test_call_N_control_never_alerts(self, client):
+        # Regression test (2026-09-06): server used to hardcode MockBackend()
+        # with its default clone_entry_s=22.0 regardless of call_key, so the
+        # all-real-voice control (call_N) would falsely spike after 22s too.
+        with client.websocket_connect("/ws/stream/call_N?pace=0") as ws:
+            ws.receive_json()  # meta
+            while True:
+                msg = ws.receive_json()
+                if msg["type"] == "end":
+                    break
+                assert msg["type"] == "chunk"
+                assert msg["state"] != "alert"
+
     def test_unknown_call_errors(self, client):
         with client.websocket_connect("/ws/stream/nope?pace=0") as ws:
             msg = ws.receive_json()
             assert msg["type"] == "error"
+
+
+class TestChanneledDemoAssets:
+    """Module C Task 2 Steps 2-3: engine behavior on the WhatsApp-channeled audio."""
+
+    def test_call_A_channeled_alerts(self, client):
+        with client.websocket_connect("/ws/stream/call_A?pace=0") as ws:
+            ws.receive_json()  # meta
+            saw_alert = False
+            while True:
+                msg = ws.receive_json()
+                if msg["type"] == "end":
+                    break
+                if msg["state"] == "alert":
+                    saw_alert = True
+            assert saw_alert, "channeled call_A must still alert"
+
+    def test_call_N_channeled_never_alerts(self, client):
+        with client.websocket_connect("/ws/stream/call_N?pace=0") as ws:
+            ws.receive_json()  # meta
+            while True:
+                msg = ws.receive_json()
+                if msg["type"] == "end":
+                    break
+                assert msg["state"] != "alert"
 
 
 def test_available_calls_no_crash():

@@ -1,7 +1,11 @@
 """
-app.py — VAANI live demo dashboard (Module C Task 4 skeleton).
+app.py — VAANI live demo dashboard (Module C Tasks 4-5).
 
-Streamlit frontend consuming the FastAPI WebSocket stream (app/server.py).
+Streamlit frontend consuming the FastAPI WebSocket stream (app/server.py):
+live risk gauge, spectrogram, EMA risk curve, and the mock-bank
+transfer -> HOLD -> OTP workflow with a hash-chained audit log
+(app/components/bank_modal.py, app/components/audit_log.py).
+
 Currently driven by the MOCK score backend (app/engine_mock.py) — clearly
 labeled as such. Once Module B Task 2 delivers a loadable checkpoint, swap
 MockBackend in server.py; this file is unchanged.
@@ -19,6 +23,8 @@ from collections import deque
 import numpy as np
 import streamlit as st
 
+from app.components.audit_log import AuditLog
+from app.components.bank_modal import render_bank_panel
 from app.components.gauge import render_gauge
 from app.components.spectrogram import SR, render_spectrogram
 from app.ws_client import StreamClient, build_uri
@@ -34,6 +40,7 @@ ss.setdefault("client", None)
 ss.setdefault("current_call", None)
 ss.setdefault("latest_chunk", None)               # last chunk dict (holds audio_b64)
 ss.setdefault("score_history", deque(maxlen=600))  # ~5 min at 0.5s hop
+ss.setdefault("audit_log", AuditLog())
 
 # --- sidebar ---------------------------------------------------------------
 with st.sidebar:
@@ -134,6 +141,9 @@ if ss.score_history:
     plt.close(fig)
 else:
     st.info("No score history yet — start the stream.")
+
+st.divider()
+render_bank_panel(state, ema, ss.audit_log)
 
 st.caption(
     "VAANI demo skeleton · mock backend · scores are placeholders, decision "

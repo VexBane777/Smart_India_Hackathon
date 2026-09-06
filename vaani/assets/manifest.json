@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_on": "2026-09-05",
+  "generated_on": "2026-09-06",
   "generator": "assets/scripts/build_demo_placeholders.py",
   "provenance": "placeholder_tts",
   "warning": "PLACEHOLDER audio for parallel development only. Real recording (Doc 4 \u00a74.4) pending: Form A consent gate not yet cleared.",
@@ -20,7 +20,13 @@
         "no_clipping": true,
         "has_speech": true
       },
-      "split": "demo"
+      "split": "demo",
+      "demo": {
+        "path": "assets/demo/call_A_whatsapp.wav",
+        "recipe": "whatsapp",
+        "sample_rate": 16000,
+        "source": "assets/raw/call_A_raw.wav"
+      }
     },
     "call_N": {
       "path": "assets/raw/call_N_raw.wav",
@@ -35,7 +41,13 @@
         "no_clipping": true,
         "has_speech": true
       },
-      "split": "demo"
+      "split": "demo",
+      "demo": {
+        "path": "assets/demo/call_N_whatsapp.wav",
+        "recipe": "whatsapp",
+        "sample_rate": 16000,
+        "source": "assets/raw/call_N_raw.wav"
+      }
     },
     "call_B": {
       "path": "assets/raw/call_B_raw.wav",
@@ -52,5 +64,6 @@
       },
       "split": "demo"
     }
-  }
+  },
+  "demo_generated_on": "2026-09-06"
 }
