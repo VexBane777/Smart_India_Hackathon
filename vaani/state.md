@@ -174,20 +174,29 @@ only genuinely CPU-only gaps were closed this session.
   `curl -L` gets a 401. Needs `pip install kaggle` + a `kaggle.json` API key
   from the user's Kaggle account (a credential this session can't supply).
   Not yet done — blocked on the user's Kaggle credentials.
-- **Real-audio pipeline smoke test**: `tests/telechannel/*` only ever
-  exercises synthetic signals. Ran a real recorded clip (librosa's bundled
-  `trumpet` example, 16 kHz mono) through all 7 `channels.yaml` recipes via
+- **Real-audio pipeline smoke test found, then fixed, a full-scale overshoot
+  bug (2026-09-06)**: `tests/telechannel/*` only ever exercised synthetic
+  signals. Ran a real recorded clip (librosa's bundled `trumpet` example,
+  16 kHz mono) through all 7 `channels.yaml` recipes via
   `telechannel/pipeline.py::process_clip` end-to-end. All produced
   finite-valued output, but **`gsm_2g` and `cellular_3g` peaked above 1.0**
-  (1.18, 1.13) — confirmed no clamp/normalize exists anywhere in
+  (1.18, 1.13) — no clamp/normalize existed anywhere in
   `mic.py`/`codec.py`/`bandlimit.py`/`pipeline.py`. `mic.py`'s gain stage
-  applies up to +12 dB unclamped (only clips 20% of the time via
-  `clip_prob`), and bandlimit filter ringing can push it further. Real
+  applies up to +12 dB unclamped (only clipped 20% of the time via
+  `clip_prob`), and bandlimit filter ringing could push it further. Real
   speech/instrument audio has enough amplitude headroom to expose this;
-  the test suite's low-amplitude synthetic fixtures never would. **Not
-  fixed yet** — flagged for the user's call on where normalization should
-  live (end of `process_clip`? inside `mic.py`?) before patching, since it
-  touches the TeleChannel data spec.
+  the test suite's low-amplitude synthetic fixtures never would.
+  **Fixed** (user chose belt-and-suspenders, option C, after a layman's
+  explanation): `apply_mic()` (`telechannel/stages/mic.py`) now always
+  clamps its output to `[-1, 1]` after gain, on top of (not instead of) the
+  existing probabilistic ±0.5 "cheap preamp" clip; `process_clip()`
+  (`telechannel/pipeline.py`) additionally clamps its final return value to
+  `[-1, 1]` as an end-of-chain safety net catching overshoot from any other
+  stage (e.g. bandlimit ringing), not just mic gain. Re-ran the same
+  trumpet-clip smoke test after the fix: every recipe now peaks at exactly
+  1.000 (correctly clamped) instead of overshooting. 2 new regression tests
+  added (`test_mic.py`, `test_pipeline.py`); full telechannel suite
+  145/145 passing.
 - **Module B CPU-only gaps closed** (`registry.py`, `train.py`,
   `models/cnn.py`), via TDD, 220/220 tests passing after:
     - `TinyCNN` now raises `ValueError` on `n_mels <= 0` or an empty/

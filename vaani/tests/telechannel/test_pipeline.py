@@ -241,6 +241,36 @@ def test_apply_bandlimit_2s_window_no_edge_artifact():
     assert banded_inband > banded_oob
 
 
+# ---------------------------------------------------------------------------
+# Full-scale safety clamp (2026-09-06): output must stay within [-1, 1]
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("recipe_name", ALL_RECIPES)
+def test_process_clip_output_never_exceeds_full_scale(monkeypatch, recipe_name):
+    """Regression test: a real recorded clip (loud enough to have headroom,
+    unlike this file's low-amplitude synthetic fixtures) through gsm_2g/
+    cellular_3g measured output peaks above 1.0 (up to ~1.18) before the
+    end-of-chain safety clamp was added -- mic.py's up-to-+12dB gain isn't
+    always followed by its probabilistic clip, and bandlimit filter ringing
+    can independently push a near-full-scale signal past 1.0. process_clip
+    must clamp its final output to [-1, 1] regardless of which stage(s)
+    caused the overshoot, for every recipe.
+    """
+    monkeypatch.setattr(pipeline, "codec_roundtrip", _identity_codec_roundtrip)
+
+    sr = 16000
+    # Loud, near-full-scale input -- gives every gain/filter stage room to
+    # overshoot if unclamped, unlike the rest of this file's amplitude=0.2
+    # default.
+    x = _sine(440, sr, duration_s=2.0, amplitude=0.95)
+
+    for seed in range(10):
+        y = process_clip(x, recipe_name, sr=sr, rng=np.random.default_rng(seed))
+        assert np.all(np.isfinite(y))
+        assert np.max(np.abs(y)) <= 1.0 + 1e-9
+
+
 @pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed in this environment")
 def test_whatsapp_2s_clip_real_ffmpeg_output_16khz_mono():
     """

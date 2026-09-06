@@ -3,11 +3,28 @@ mic.py — Microphone simulation stage.
 
 Applies a random gain (simulating varying mic sensitivity / recording
 levels) and, with some probability, hard-clips the signal (simulating a
-cheap/overloaded mic preamp).
+cheap/overloaded mic preamp). A final [-1, 1] safety clamp always applies
+regardless of `clip_prob` -- see the note below.
 
 See DOC1_TELECHANNEL_SPEC.md for the TeleChannel stage pipeline this module
 plugs into (a later task chains these stages together; this module is
 independent and does not do that chaining).
+
+Full-scale safety clamp (2026-09-06):
+
+    The +12dB gain ceiling (~4x linear) is only followed by the cheap-mic
+    ±0.5 clip `clip_prob` of the time (default 20%) -- the other 80%, gain
+    output was previously returned unbounded. A real recorded clip (not
+    this repo's low-amplitude synthetic test fixtures) with a ~0.7 peak
+    input and +12dB gain overshoots 1.0 (measured up to ~1.18 after the
+    rest of the `gsm_2g`/`cellular_3g` recipe chain) -- out of the [-1, 1]
+    range every downstream consumer (FLAC write, mel-spectrogram
+    extraction) assumes. `apply_mic` now always clamps its output to
+    [-1, 1] as a final safety net, on top of (not instead of) the existing
+    probabilistic ±0.5 "cheap preamp" clip -- see also
+    `telechannel/pipeline.py::process_clip`'s matching end-of-chain clamp,
+    which catches overshoot from any other stage (e.g. bandlimit filter
+    ringing), not just this one.
 """
 
 import numpy as np
@@ -43,5 +60,9 @@ def apply_mic(x, clip_prob=0.2, rng=None):
 
     if rng.random() < clip_prob:
         y = np.clip(y, -CLIP_LIMIT, CLIP_LIMIT)
+
+    # Always-on safety clamp: independent of clip_prob, gain alone can push
+    # a near-full-scale input past [-1, 1] (see module docstring).
+    y = np.clip(y, -1.0, 1.0)
 
     return y

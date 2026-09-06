@@ -97,7 +97,8 @@ def process_clip(audio, recipe_name, sr=16000, config=None, config_path=None, rn
     Returns:
         numpy array, float64, 1-D, mono, same sample rate as the input
         (`sr`) and (up to codec pad/trim jitter, which is itself realistic
-        per Doc 1) the same length as the input.
+        per Doc 1) the same length as the input. Always clamped to
+        [-1, 1] (see the 2026-09-06 safety-clamp note below).
 
     Raises:
         KeyError: if `recipe_name` is not defined in the config.
@@ -141,5 +142,12 @@ def process_clip(audio, recipe_name, sr=16000, config=None, config_path=None, rn
     band_cfg = recipe.get("bandlimit")
     if band_cfg and band_cfg.get("enabled", False):
         x = apply_bandlimit(x, sr=sr)
+
+    # Final full-scale safety clamp (2026-09-06): every downstream consumer
+    # (FLAC write, mel-spectrogram extraction) assumes output in [-1, 1].
+    # apply_mic() already clamps its own output, but this catches overshoot
+    # from any other stage -- e.g. bandlimit filter ringing on a
+    # near-full-scale signal -- regardless of which stage(s) caused it.
+    x = np.clip(x, -1.0, 1.0)
 
     return x
