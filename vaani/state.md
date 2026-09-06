@@ -44,6 +44,32 @@
 - MOD-A-06 (`Verify Codec Support`, Backlog_MOD_A_TeleChannel.md) is now
   satisfied: `ffmpeg -encoders | grep -Ei "gsm|amr|opus|alaw|mulaw"` shows
   libopencore_amrnb, libvo_amrwbenc, libgsm, libopus, pcm_alaw, pcm_mulaw
+## Module C parallel-safe slice (2026-09-05)
+- **Task 1 — assets, as PLACEHOLDERS only:** real human recording (Doc 4 §4.4,
+  Form A consent gate) has NOT happened. `assets/raw/call_{A,N,B}_raw.wav` are
+  machine-generated stand-ins (Windows SAPI TTS, 48 kHz mono, 90.0 s, −6.0 dBFS
+  peaks, QA-passing) built by `assets/scripts/build_demo_placeholders.py` from
+  `assets/raw/call_scripts.json` (the Doc 4 §4.2/§4.6 script source of truth).
+  `assets/manifest.json` records `provenance: placeholder_tts` and the consent
+  warning — replace with real takes before any pitch/demo use.
+- **Task 4 — skeleton done, mock backend:** `app/server.py` (FastAPI WebSocket
+  streamer, 0.5 s chunks), `app/engine_mock.py` (mock score backend implementing
+  the master plan §6 decision logic: EMA + 2-consecutive-window rule;
+  EMA α=0.7 — with α=0.3 the EMA's memory defeats the 2-window rule, caught by
+  tests), `app/ws_client.py`, `app/components/{gauge,spectrogram}.py` (pure
+  matplotlib mel — no librosa), `app.py` (Streamlit + st.fragment). Verified
+  live: server boot → WS stream of call_A → first alert at t=22.5 s vs clone
+  entry at 22 s (onset ≈3–4 s incl. window, per spec). Single swap point:
+  `MockBackend` → real Module B backend; nothing else changes.
+- **Task 7 Steps 1–2:** `docs/pitch/deck_structure.md` (12 slides per Doc 3
+  §3.2) + `docs/pitch/lockdown.json` (number→source mapping). All values still
+  `[M]`/pending — Step 3 remains gated on Module B's measured runs.
+- **Tests:** +20 in `tests/demo/` (engine contract, alert timing, A-alerts/
+  N-never, spectrogram, WS streaming). Full suite: **168 passed** (148 prior).
+  Had to `pip install librosa` (Module A's `validate_reality.py` imports it at
+  module scope; was missing in this env — pre-existing gap, now resolved).
+- Committed as 9925963 on `vaani`; audio files stay untracked per .gitignore.
+
   all present.
 
 ## Review pass (2026-09-04)
