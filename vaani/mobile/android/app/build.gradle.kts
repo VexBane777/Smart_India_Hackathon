@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "org.vaani.mobile"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
