@@ -44,6 +44,8 @@
 - MOD-A-06 (`Verify Codec Support`, Backlog_MOD_A_TeleChannel.md) is now
   satisfied: `ffmpeg -encoders | grep -Ei "gsm|amr|opus|alaw|mulaw"` shows
   libopencore_amrnb, libvo_amrwbenc, libgsm, libopus, pcm_alaw, pcm_mulaw
+  all present.
+
 ## Module C parallel-safe slice (2026-09-05)
 - **Task 1 — assets, as PLACEHOLDERS only:** real human recording (Doc 4 §4.4,
   Form A consent gate) has NOT happened. `assets/raw/call_{A,N,B}_raw.wav` are
@@ -69,8 +71,6 @@
   Had to `pip install librosa` (Module A's `validate_reality.py` imports it at
   module scope; was missing in this env — pre-existing gap, now resolved).
 - Committed as 9925963 on `vaani`; audio files stay untracked per .gitignore.
-
-  all present.
 
 ## Review pass (2026-09-04)
 - Fixed a typo in Module D's plan (`la-Cuda` → `CUDA`, Global Constraints section).
@@ -214,10 +214,14 @@ only genuinely CPU-only gaps were closed this session.
       making it strict would break ~5 existing tests for no real benefit,
       so left as-is), and the entire `tracking:`/MLflow block (needs a
       reachable MLflow server — a GPU-rota-machine concern, not CPU-only).
-- **Module C: confirmed zero code exists** — no FastAPI/Streamlit/bank-sim/
-  audit-log anywhere in the repo. All 8 tasks in
-  `docs/superpowers/plans/2026-09-04-vaani-module-c-product.md` are
-  unstarted. User's call (asked, not yet decided): most of Module C (UI,
-  bank sim, hash-chained log, airplane-mode test) was never actually
-  GPU/corpus-gated — only Task 1-3 (demo asset recording/channeling)
-  depend on having real demo audio.
+- **Module C: confirmed zero code existed at the time this was checked**
+  (no FastAPI/Streamlit/bank-sim/audit-log anywhere in the repo) — true as
+  of this session's investigation, but a separate parallel session landed
+  a Module C slice (`app/server.py`, `app/engine_mock.py`, placeholder demo
+  assets; see "Module C parallel-safe slice" above, commit `9925963`)
+  concurrently, merged into this same push. User's call on further Module C
+  work stands regardless: most of it (UI, bank sim, hash-chained log,
+  airplane-mode test) was never actually GPU/corpus-gated — only Task 1-3
+  (demo asset recording/channeling) depend on having real demo audio, and
+  the merged slice's assets are explicitly placeholder TTS, not real
+  consented recordings.
