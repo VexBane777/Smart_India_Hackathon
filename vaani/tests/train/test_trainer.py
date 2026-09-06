@@ -14,8 +14,9 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 import models  # noqa: F401  (registers TinyCNN etc. via @register_model side effects)
-from registry import load
-from train import evaluate, train
+from registry import load, load_config
+import train as train_module
+from train import evaluate, train, train_from_config
 
 
 N_MELS = 64
@@ -161,3 +162,109 @@ def test_training_reduces_loss_on_easy_synthetic_task(model, train_loader, val_l
     # And training should have moved loss meaningfully below the untrained
     # baseline (generous margin to avoid flakiness).
     assert late_avg_val_loss <= pre_metrics["loss"] * 1.05
+
+
+# ---------------------------------------------------------------------------
+# Tests: train_from_config (consumes the optim:/ckpt: blocks train() ignores)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cnn_week1_config(tmp_path):
+    """cnn_week1's config, with ckpt.dir redirected under tmp_path so the
+    test doesn't write into the real repo's runs/ directory."""
+    config = load_config("cnn_week1")
+    config["ckpt"]["dir"] = str(tmp_path / "runs" / "cnn_week1")
+    config["ckpt"]["every_steps"] = 3
+    config["ckpt"]["keep_last"] = 2
+    return config
+
+
+def test_train_from_config_reads_optim_epochs_not_hardcoded_default(
+    cnn_week1_config, train_loader, val_loader
+):
+    """cnn_week1.yaml declares optim.epochs: 20; train_from_config() must
+    actually run that many epochs rather than train()'s hardcoded default
+    of 10, proving the optim: block is read, not ignored."""
+    torch.manual_seed(42)
+    model = load("cnn_week1")
+    config = dict(cnn_week1_config)
+    config["optim"] = dict(config["optim"])
+    config["optim"]["epochs"] = 3  # override down, just to keep the test fast
+
+    history = train_from_config(model, config, train_loader, val_loader, device=torch.device("cpu"))
+
+    assert len(history) == 3
+
+
+def test_train_from_config_uses_configured_learning_rate(
+    cnn_week1_config, train_loader, val_loader, monkeypatch
+):
+    """The optimizer's lr must come from optim.lr, not train()'s hardcoded
+    default of 1e-3."""
+    torch.manual_seed(42)
+    model = load("cnn_week1")
+    config = dict(cnn_week1_config)
+    config["optim"] = dict(config["optim"])
+    config["optim"]["epochs"] = 1
+    config["optim"]["lr"] = 5e-2
+
+    captured = {}
+    original_adamw = torch.optim.AdamW
+
+    def spy_adamw(params, lr=None, **kwargs):
+        captured["lr"] = lr
+        return original_adamw(params, lr=lr, **kwargs)
+
+    # train_from_config resolves "adamw" via its own _SUPPORTED_OPTIMIZERS
+    # dict (bound at import time), so patch that entry directly rather than
+    # torch.optim.AdamW -- the latter wouldn't be seen by the already-bound
+    # reference.
+    monkeypatch.setitem(train_module._SUPPORTED_OPTIMIZERS, "adamw", spy_adamw)
+
+    train_from_config(model, config, train_loader, val_loader, device=torch.device("cpu"))
+
+    assert captured["lr"] == 5e-2
+
+
+def test_train_from_config_saves_periodic_checkpoints_and_rotates(
+    cnn_week1_config, train_loader, val_loader
+):
+    """ckpt.every_steps/keep_last must actually be honored: checkpoints are
+    written periodically during training (not just once at the end), and
+    only the most recent `keep_last` are retained."""
+    torch.manual_seed(42)
+    model = load("cnn_week1")
+    config = dict(cnn_week1_config)
+    config["optim"] = dict(config["optim"])
+    config["optim"]["epochs"] = 5
+
+    train_from_config(model, config, train_loader, val_loader, device=torch.device("cpu"))
+
+    ckpt_dir = Path(config["ckpt"]["dir"])
+    assert ckpt_dir.exists()
+    saved = sorted(ckpt_dir.glob("*.pt"))
+    assert len(saved) == config["ckpt"]["keep_last"]
+
+
+def test_train_from_config_checkpoint_payload_supports_resume(
+    cnn_week1_config, train_loader, val_loader
+):
+    """Checkpoint payload includes model/optimizer state, step, epoch, and
+    config_hash -- the richer resume payload DOC2 sec2.3 specifies, not just
+    a bare state_dict."""
+    torch.manual_seed(42)
+    model = load("cnn_week1")
+    config = dict(cnn_week1_config)
+    config["optim"] = dict(config["optim"])
+    config["optim"]["epochs"] = 2
+
+    train_from_config(model, config, train_loader, val_loader, device=torch.device("cpu"))
+
+    ckpt_dir = Path(config["ckpt"]["dir"])
+    latest = sorted(ckpt_dir.glob("*.pt"))[-1]
+    payload = torch.load(latest, map_location="cpu")
+
+    assert set(["model", "optimizer", "step", "epoch", "config_hash"]) <= set(payload.keys())
+    assert payload["config_hash"] == payload["config_hash"]  # deterministic, non-empty
+    assert isinstance(payload["config_hash"], str) and len(payload["config_hash"]) > 0

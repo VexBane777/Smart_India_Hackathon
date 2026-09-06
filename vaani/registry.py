@@ -33,8 +33,17 @@ Config schema deviation: `ssl_head`'s `freeze:` block is inert:
     editing the config. Similarly, the config's fine-tune-oriented `optim`
     settings (`bfloat16`, `grad_checkpointing`, `accum`) are not consumed
     by anything -- analogous to the already-noted-elsewhere inert
-    `ckpt`/`tracking` blocks in `base.yaml`. See `ssl_head.py`'s module
-    docstring for the full rationale and `state.md`'s known-gaps list.
+    `tracking` block in `base.yaml` (still unimplemented; see
+    `train.py`'s module docstring). See `ssl_head.py`'s module docstring
+    for the full rationale and `state.md`'s known-gaps list.
+
+`${name}` interpolation (no longer a gap):
+
+    `load_config()` substitutes the literal `${name}` placeholder in string
+    config values (e.g. `ckpt.dir: runs/${name}`, `ckpt.hub_repo:
+    vaani/models/${name}`) with the merged config's own top-level `name`
+    field, via `_interpolate()`. `train.py::train_from_config()` is the
+    consumer that reads the resulting `ckpt.dir`/`every_steps`/`keep_last`.
 """
 
 from pathlib import Path
@@ -147,8 +156,28 @@ def load_config(config_path: str, configs_dir: Optional[str] = None) -> Dict[str
     # block (e.g. features.n_mels) -- since base.yaml is entirely nested
     # blocks, that's not an acceptable merge semantics for this schema.
     merged_config = _deep_merge(base_config, model_config)
+    merged_config = _interpolate(merged_config, merged_config.get("name"))
 
     return merged_config
+
+
+def _interpolate(value: Any, name: Optional[str]) -> Any:
+    """
+    Recursively substitute the literal placeholder `${name}` in string
+    config values with `name` (the config's own top-level `name` field).
+
+    Used for `ckpt.dir: runs/${name}` / `ckpt.hub_repo: vaani/models/${name}`
+    in base.yaml. If `name` is None (no top-level `name` key in the merged
+    config), placeholders are left unresolved rather than raising -- there
+    is nothing to substitute them with.
+    """
+    if isinstance(value, dict):
+        return {k: _interpolate(v, name) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_interpolate(v, name) for v in value]
+    if isinstance(value, str) and name is not None:
+        return value.replace("${name}", name)
+    return value
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:

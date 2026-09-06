@@ -40,6 +40,12 @@ class TinyCNN(nn.Module):
         dropout: Dropout probability applied in the classification head, before
                 the final Linear layer (default: 0.0, i.e. no dropout). Only
                 used if config is None.
+
+    Raises:
+        ValueError: If n_mels <= 0, chs is empty, or chs contains a
+            non-positive channel count -- these would otherwise fail
+            obscurely later (chs[-1] IndexError, or a degenerate/invalid
+            Conv2d) rather than at construction time.
     """
 
     input_kind: str = "mel"
@@ -64,6 +70,13 @@ class TinyCNN(nn.Module):
             chs = tuple(channels_list)
             # Extract dropout probability from config.model.dropout
             dropout = config.get("model", {}).get("dropout", dropout)
+
+        if n_mels <= 0:
+            raise ValueError(f"n_mels must be positive, got {n_mels}")
+        if len(chs) == 0:
+            raise ValueError("chs must be a non-empty sequence of channel counts")
+        if any(ch <= 0 for ch in chs):
+            raise ValueError(f"chs must contain only positive channel counts, got {chs}")
 
         self.n_mels = n_mels
         self.chs = chs

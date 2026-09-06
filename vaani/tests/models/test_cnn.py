@@ -262,3 +262,43 @@ def test_tinycnn_output_is_float():
     x = torch.randn(1, 1, 64, 200)
     output = model(x)
     assert output.dtype == torch.float32
+
+
+# ---------------------------------------------------------------------------
+# Tests: Shape/channel validation
+# ---------------------------------------------------------------------------
+
+
+def test_tinycnn_empty_channels_raises_error():
+    """Test that an empty chs tuple raises ValueError instead of failing
+    obscurely later (chs[-1] IndexError in the head, or a degenerate model
+    with zero conv blocks)."""
+    with pytest.raises(ValueError, match="chs"):
+        TinyCNN(chs=())
+
+
+def test_tinycnn_non_positive_channel_raises_error():
+    """Test that a zero or negative channel count raises ValueError rather
+    than constructing a Conv2d with an invalid out_channels."""
+    with pytest.raises(ValueError, match="chs"):
+        TinyCNN(chs=(32, 0, 128, 256))
+
+    with pytest.raises(ValueError, match="chs"):
+        TinyCNN(chs=(32, -64, 128, 256))
+
+
+def test_tinycnn_non_positive_n_mels_raises_error():
+    """Test that a zero or negative n_mels raises ValueError."""
+    with pytest.raises(ValueError, match="n_mels"):
+        TinyCNN(n_mels=0)
+
+    with pytest.raises(ValueError, match="n_mels"):
+        TinyCNN(n_mels=-16)
+
+
+def test_tinycnn_config_with_invalid_channels_raises_error():
+    """Test that the same validation applies when values come from a config
+    dict, not just direct keyword arguments."""
+    config = {"model": {"channels": []}}
+    with pytest.raises(ValueError, match="chs"):
+        TinyCNN(config)

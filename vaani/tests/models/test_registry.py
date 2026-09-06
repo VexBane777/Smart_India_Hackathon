@@ -368,6 +368,69 @@ def test_registry_load_from_clean_subprocess():
     assert "TinyCNN" in result.stdout
 
 
+# ---------------------------------------------------------------------------
+# Tests: ${name} interpolation
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_interpolates_name_placeholder(temp_configs_dir):
+    """`${name}` in string config values (e.g. ckpt.dir / ckpt.hub_repo) is
+    substituted with the config's own top-level `name` field.
+
+    Regression test for the documented gap in base.yaml/train.py's
+    docstrings: no template-resolution step existed anywhere, so
+    `ckpt.dir: runs/${name}` was returned to callers still containing the
+    literal, unresolved `${name}` placeholder.
+    """
+    import yaml
+
+    with open(temp_configs_dir / "base.yaml") as f:
+        base_config = yaml.safe_load(f)
+    base_config["ckpt"] = {
+        "dir": "runs/${name}",
+        "hub_repo": "vaani/models/${name}",
+        "every_steps": 500,
+        "keep_last": 3,
+    }
+    with open(temp_configs_dir / "base.yaml", "w") as f:
+        yaml.dump(base_config, f)
+
+    config = load_config("test_model", str(temp_configs_dir))
+
+    assert config["ckpt"]["dir"] == "runs/test_model_v1"
+    assert config["ckpt"]["hub_repo"] == "vaani/models/test_model_v1"
+    # every_steps/keep_last are untouched (not strings, nothing to interpolate)
+    assert config["ckpt"]["every_steps"] == 500
+
+
+def test_load_config_without_name_leaves_placeholder_unresolved(temp_configs_dir):
+    """If a config has no top-level `name`, `${name}` is left as-is rather
+    than crashing load_config() -- there is nothing to substitute it with."""
+    import yaml
+
+    with open(temp_configs_dir / "base.yaml") as f:
+        base_config = yaml.safe_load(f)
+    base_config["ckpt"] = {"dir": "runs/${name}"}
+    with open(temp_configs_dir / "base.yaml", "w") as f:
+        yaml.dump(base_config, f)
+
+    no_name_config = {"type": "test_model"}
+    with open(temp_configs_dir / "no_name.yaml", "w") as f:
+        yaml.dump(no_name_config, f)
+
+    config = load_config("no_name", str(temp_configs_dir))
+    assert config["ckpt"]["dir"] == "runs/${name}"
+
+
+def test_load_config_uses_real_cnn_week1_name_for_interpolation():
+    """End-to-end: the real cnn_week1.yaml + base.yaml resolve ckpt.dir to
+    'runs/cnn_week1', matching DOC2's documented `ckpt.dir: runs/${name}`
+    convention."""
+    config = load_config("cnn_week1")
+    assert config["ckpt"]["dir"] == "runs/cnn_week1"
+    assert config["ckpt"]["hub_repo"] == "vaani/models/cnn_week1"
+
+
 def test_load_config_bare_name_vs_full_path(temp_configs_dir):
     """Test that both bare names and full paths work identically."""
     config_bare = load_config("test_model", str(temp_configs_dir))

@@ -131,3 +131,67 @@
   SpecAugment leak (teacher silently nondeterministic under `model.train()`)
   and a hardcoded hidden-state count (crash on non-12-layer bases) were both
   fixed, not just documented.
+
+## CPU-only closing tasks addressed (2026-09-06)
+
+User asked to determine whether a Kaggle-download command works, whether the
+existing pipeline handles real audio, and to close out CPU-feasible pending
+items across Modules A/B/C that were previously deferred for lack of a real
+corpus/GPU. GPU remains a separate rota machine (per Doc 8), not this
+session's machine (`torch 2.10.0+cpu`, no `nvidia-smi`) — so anything
+actually requiring GPU compute or a real training corpus is still deferred;
+only genuinely CPU-only gaps were closed this session.
+
+- **Kaggle download command (`sripaadsrinivasan/audio-mnist`) does not work
+  as given**: no `kaggle` CLI installed, no `~/.kaggle/kaggle.json` —
+  `kaggle.com/api/v1/datasets/download/...` requires Basic Auth, so the bare
+  `curl -L` gets a 401. Needs `pip install kaggle` + a `kaggle.json` API key
+  from the user's Kaggle account (a credential this session can't supply).
+  Not yet done — blocked on the user's Kaggle credentials.
+- **Real-audio pipeline smoke test**: `tests/telechannel/*` only ever
+  exercises synthetic signals. Ran a real recorded clip (librosa's bundled
+  `trumpet` example, 16 kHz mono) through all 7 `channels.yaml` recipes via
+  `telechannel/pipeline.py::process_clip` end-to-end. All produced
+  finite-valued output, but **`gsm_2g` and `cellular_3g` peaked above 1.0**
+  (1.18, 1.13) — confirmed no clamp/normalize exists anywhere in
+  `mic.py`/`codec.py`/`bandlimit.py`/`pipeline.py`. `mic.py`'s gain stage
+  applies up to +12 dB unclamped (only clips 20% of the time via
+  `clip_prob`), and bandlimit filter ringing can push it further. Real
+  speech/instrument audio has enough amplitude headroom to expose this;
+  the test suite's low-amplitude synthetic fixtures never would. **Not
+  fixed yet** — flagged for the user's call on where normalization should
+  live (end of `process_clip`? inside `mic.py`?) before patching, since it
+  touches the TeleChannel data spec.
+- **Module B CPU-only gaps closed** (`registry.py`, `train.py`,
+  `models/cnn.py`), via TDD, 220/220 tests passing after:
+    - `TinyCNN` now raises `ValueError` on `n_mels <= 0` or an empty/
+      non-positive `chs` tuple, instead of failing obscurely later
+      (`chs[-1]` IndexError or an invalid `Conv2d`).
+    - `registry.load_config()` now resolves `${name}` placeholders (e.g.
+      `ckpt.dir: runs/${name}` -> `runs/cnn_week1`) via a new
+      `_interpolate()` step, recursing through the merged config's string
+      values using its own top-level `name` field. No-op (placeholder left
+      literal) if the config has no `name`.
+    - New `train.py::train_from_config(model, config, train_loader,
+      val_loader, device=None)`: reads `optim.opt`/`optim.lr`/`optim.epochs`
+      to build the optimizer and epoch count (adam/adamw only), and
+      `ckpt.dir`/`ckpt.every_steps`/`ckpt.keep_last` to write periodic,
+      rotated checkpoints with the richer `{model, optimizer, step, epoch,
+      config_hash}` resume payload DOC2 sec2.3 specifies — instead of
+      `train()`'s single state-dict-only save at the very end. The original
+      `train()` is untouched (still used by existing tests/callers).
+    - Deliberately still NOT done (needs either GPU time or is out of
+      scope for this pass): `optim.sched` (LR scheduling), `optim.clip`
+      (gradient clipping), reading a checkpoint back in to actually resume,
+      the `register_model` silent-overwrite "gap" (turns out the test
+      suite's fixtures rely on that overwrite behavior for test isolation —
+      making it strict would break ~5 existing tests for no real benefit,
+      so left as-is), and the entire `tracking:`/MLflow block (needs a
+      reachable MLflow server — a GPU-rota-machine concern, not CPU-only).
+- **Module C: confirmed zero code exists** — no FastAPI/Streamlit/bank-sim/
+  audit-log anywhere in the repo. All 8 tasks in
+  `docs/superpowers/plans/2026-09-04-vaani-module-c-product.md` are
+  unstarted. User's call (asked, not yet decided): most of Module C (UI,
+  bank sim, hash-chained log, airplane-mode test) was never actually
+  GPU/corpus-gated — only Task 1-3 (demo asset recording/channeling)
+  depend on having real demo audio.
