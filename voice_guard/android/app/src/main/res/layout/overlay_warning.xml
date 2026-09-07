@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="#C62828"
+    android:padding="12dp">
+
+    <TextView
+        android:id="@+id/overlayScore"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="92% RISK"
+        android:textColor="#FFFFFF"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/overlayVerdict"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="⚠️ AI VOICE DETECTED — DO NOT SHARE OTP OR PERSONAL INFO"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:layout_marginTop="4dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Hang up • Call back on a known number • Escalate to supervisor • Request OTP via app"
+        android:textColor="#FFCDD2"
+        android:textSize="10sp"
+        android:layout_marginTop="4dp" />
+
+    <TextView
+        android:id="@+id/overlayDismiss"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="DISMISS ✕"
+        android:textColor="#FFFFFF"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        android:padding="8dp"
+        android:layout_gravity="end"
+        android:background="#88000000" />
+</LinearLayout>
