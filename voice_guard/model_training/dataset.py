@@ -54,7 +54,7 @@ def _maybe_channel(pcm: np.ndarray, recipe: str | None) -> np.ndarray:
         return pcm
     from telechannel.pipeline import process_clip  # vaani package
 
-    return process_clip(pcm, SAMPLE_RATE, recipe)
+    return process_clip(pcm, recipe, SAMPLE_RATE)
 
 
 def build_examples(
