@@ -3,9 +3,17 @@
 ## Current Status
 - **Phase**: Module B Week-1 slice + Task 3 (SSL Teacher) implemented; Module C
   fully implemented (all code-buildable tasks; see "Module C implemented per
-  plan" below for what's deliberately still gated/flagged)
+  plan" below for what's deliberately still gated/flagged) and **committed**
+  (`1cfec2b`, contradicting this file's older "not yet committed" note below —
+  trust `git log`, not that note). 270/270 tests passing as of 2026-09-07.
+- A second, parallel demo surface (`voice_guard/`, a Flutter Android POC +
+  its own FastAPI backend on port 8001) landed 2026-09-07, now wired onto
+  the same `AlertStateMachine` decision policy as `vaani/app/engine_mock.py`
+  (commit `2ec7450`). It is a separate git-tracked directory at repo root,
+  not part of the `vaani/` Python package. Model is still heuristic — no
+  `assets/models/*.tflite` dropped in yet.
 - **Goal**: Execute implementation plans.
-- **Last Updated**: 2026-09-06
+- **Last Updated**: 2026-09-07
 
 ## Progress Tracking
 - [x] Explore project context
@@ -323,3 +331,33 @@ the network cable" step are flagged as needing a human, not attempted.
   (demo asset recording/channeling) depend on having real demo audio, and
   the merged slice's assets are explicitly placeholder TTS, not real
   consented recordings.
+
+## Demo-prep sweep (2026-09-07)
+
+User asked to walk through remaining demo prep and finish everything not
+gated on a human. Findings:
+
+- Module C's "not yet committed" note above was stale — it was committed
+  as `1cfec2b` sometime between 2026-09-06 and now (by this session or
+  another concurrent one; `git log` is authoritative, this file lags).
+- **Real bug found and fixed in `voice_guard/`**: `pubspec.yaml` declares
+  three asset directories (`assets/models/`, `assets/sounds/`, `assets/images/`)
+  that didn't exist on disk — `flutter test`/`flutter build`/`flutter run`
+  all errored on it ("unable to find directory entry in pubspec.yaml").
+  Fixed by creating the three directories with `.gitkeep` placeholders.
+  Verified clean after: `flutter test` (3 tests pass, no errors),
+  `flutter analyze` (no issues), backend `/v1/analyze-chunk` smoke-tested
+  live via `uvicorn` + `curl` (200 OK, correct response shape), `/docs`
+  loads, and `vaani/app/server.py` still imports cleanly alongside it
+  (no port/state collision between the two FastAPI apps — 8000 vs 8001).
+- Everything else identified as remaining is human-only and was not
+  attempted: real consented demo-audio recording (Doc 4), physical
+  rehearsal + literal airplane-mode/cable-pull test, Kaggle API
+  credentials, GPU-rota training time, judge Q&A drills, and the product
+  decision of whether `voice_guard` (Android) supplements or replaces the
+  Streamlit demo as the primary demo surface for judges — not decided
+  yet, ask before assuming either way.
+- `docs/pitch/lockdown.json` Step 3 (measured numbers) remains
+  deliberately unfilled — still no real training run or measured
+  latency/EER exists to fill it with, and the master plan's Global
+  Constraint forbids estimated numbers on slides.
