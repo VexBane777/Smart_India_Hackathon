@@ -332,6 +332,44 @@ the network cable" step are flagged as needing a human, not attempted.
   the merged slice's assets are explicitly placeholder TTS, not real
   consented recordings.
 
+## voice_guard: real TFLite model trained (2026-09-08, `ca4937c`)
+
+The GPU-session peer (`laptop-hr7ru7k8-steady-rivest`) ran
+`voice_guard/model_training/train.py` on real ASVspoof 2019 LA (2580
+bonafide + a 5000-file random subsample of spoof, train partition) and
+replaced the 10KB placeholder `.tflite` (from `98738b2`) with a real
+28KB trained model. Also fixed a real bug in `dataset.py`: my
+`_maybe_channel` called `process_clip(pcm, sr, recipe)`, but the actual
+signature is `process_clip(audio, recipe_name, sr=...)` — positional-arg
+order was wrong, which would have silently passed the sample rate where
+a recipe name was expected. Fixed to `process_clip(pcm, recipe,
+SAMPLE_RATE)`.
+
+**Result:** `final_val_eer = 0.0266` (2.66%) on a 938-window held-out
+split by source file (`voice_guard/model_training/runs/voice_guard_v1/metrics.json`).
+Close to but above the master plan's ≤2% minimum for ASVspoof 2019 LA
+(`00_MASTER_PLAN.md` §10) — though not a like-for-like comparison, since
+this is a different model (the voice_guard MLP over LFCC+prosody, not
+the Streamlit/Module-B TinyCNN engine) on a train-script-internal split,
+not the official ASVspoof eval protocol. **Do not** copy this number into
+`docs/pitch/lockdown.json`'s S7 slots — those are specifically Module B's
+5-protocol leaderboard numbers; conflating the two models' numbers would
+violate the master plan's "honest numbers only" rule by misattributing
+which system was measured.
+
+**Known limitation, reported honestly by the training session:** this run
+used `--channel clean` only — TeleChannel phone-degradation was skipped
+to get a fast result (each recipe needs a real ffmpeg subprocess
+round-trip per file; the full `whatsapp volte clean` run is multi-hour
+across this corpus size). **The model has not been validated on
+phone-call-shaped audio yet, only clean studio recordings.** A follow-up
+full-channel run is needed before this EER can be trusted for on-device
+phone-call performance — flagging this explicitly so it isn't presented
+as a phone-call number it isn't.
+
+Verified after pulling: `flutter analyze` (no issues) and `flutter test`
+(3/3 passing) both still pass with the new model in place.
+
 ## Demo-prep sweep (2026-09-07)
 
 User asked to walk through remaining demo prep and finish everything not
