@@ -1,0 +1,12 @@
+numpy
+torch
+soundfile
+librosa
+onnx
+
+# export_tflite.py only (heavy — install separately on whichever machine
+# runs the conversion step, see README.md):
+# tensorflow
+# onnx2tf
+# onnx-graphsurgeon
+# sng4onnx
