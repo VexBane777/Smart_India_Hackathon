@@ -49,12 +49,18 @@ class AudioPipeline {
       // plan §6), not a single sample crossing threshold — matches the
       // decision logic in vaani/app/engine_mock.py's AlertStateMachine.
       if (riskProvider.isAlert) {
+        // cur.label is derived from RiskScore's own fixed 0.30/0.70 bands,
+        // which don't track settings.sensitivity (the alertThreshold above)
+        // — an alert can fire at ema=0.65 while cur.label still says
+        // "SUSPICIOUS". The fact that an alert fired at all means the verdict
+        // is AI DETECTED by definition, so say that instead of cur.label.
+        const alertVerdict = 'AI DETECTED';
         if (settings.overlayEnabled) {
-          try { await calls.showOverlay(riskScore: cur.score, verdict: cur.label); } catch (_) {}
+          try { await calls.showOverlay(riskScore: cur.score, verdict: alertVerdict); } catch (_) {}
         }
         if (!context.mounted) return;
         if (settings.soundEnabled) {
-          try { await notifications.showRiskAlert(score: cur.score, verdict: cur.label); } catch (_) {}
+          try { await notifications.showRiskAlert(score: cur.score, verdict: alertVerdict); } catch (_) {}
         }
       }
     });
