@@ -34,7 +34,7 @@ class AppConstants {
   // Thresholds (configurable via Settings)
   static const defaultThresholdLow = 0.30;
   static const defaultThresholdHigh = 0.70;
-  static const defaultSensitivity = 0.70;
+  static const defaultSensitivity = 0.60; // alert threshold, matches engine_mock.py's ALERT_THRESHOLD
 
   // Risk bands
   static String verdictFor(double score) {

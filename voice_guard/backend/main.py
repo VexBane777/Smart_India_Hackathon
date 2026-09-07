@@ -8,10 +8,25 @@ Run:  pip install fastapi uvicorn pydantic
       uvicorn main:app --reload --port 8000
 Docs: http://localhost:8000/docs
 """
+import sys
+from pathlib import Path
+
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import time, math
+
+# Reuse the canonical EMA + 2-consecutive-window alert policy (master plan
+# §6) instead of a second, independently-tuned decision rule: same
+# ALERT_THRESHOLD/EMA_ALPHA/CONSECUTIVE_REQUIRED as the Streamlit demo's
+# engine_mock.AlertStateMachine, and the same one the Flutter app's
+# RiskScoreProvider mirrors. Only the raw per-window score generator
+# (`_heuristic` below) differs, since neither side has a real trained
+# model yet.
+_VAANI_DIR = Path(__file__).resolve().parents[2] / "vaani"
+if str(_VAANI_DIR) not in sys.path:
+    sys.path.insert(0, str(_VAANI_DIR))
+from app.engine_mock import AlertStateMachine  # noqa: E402
 
 app = FastAPI(
     title="VoiceGuard Integration API",
@@ -20,6 +35,20 @@ app = FastAPI(
 )
 
 API_KEY = "vg_demo_key"
+
+# Per-session alert state (EMA + consecutive-window tracking) — keyed by
+# the caller-supplied session_id so a stream of analyze-chunk calls for one
+# call behaves like one continuous engine run, matching how the Streamlit
+# demo's WebSocket stream drives a single AlertStateMachine per call.
+_SESSIONS: dict[str, AlertStateMachine] = {}
+
+
+def _session(session_id: str) -> AlertStateMachine:
+    sm = _SESSIONS.get(session_id)
+    if sm is None:
+        sm = AlertStateMachine()
+        _SESSIONS[session_id] = sm
+    return sm
 
 class ProsodyIn(BaseModel):
     pauseRatio: float = 0.2
@@ -30,6 +59,7 @@ class AnalyzeIn(BaseModel):
     lfcc: List[float] = Field(..., description="60 LFCC coefficients (mean-pooled)")
     prosody: Optional[ProsodyIn] = None
     metadata: Optional[dict] = None
+    session_id: str = Field("default", description="Groups chunks from one call so EMA/consecutive-window state carries across requests")
 
 class AnalyzeOut(BaseModel):
     riskScore: float
@@ -54,10 +84,13 @@ def _heuristic(lfcc: List[float], prosody: Optional[ProsodyIn]) -> float:
     raw = max(0, min(1, var_h*0.9 + pause*0.25 + abs(lfcc[0])*0.05))
     return 0.08 + raw*0.78
 
-def _verdict(score: float) -> str:
-    if score < 0.30: return "VERIFIED_HUMAN"
-    if score < 0.70: return "SUSPICIOUS"
-    return "AI_DETECTED"
+def _verdict(state: str) -> str:
+    # Maps AlertStateMachine's normal/warn/alert to the API's public verdict
+    # vocabulary. "alert" requires 2+ consecutive high-EMA windows, so a
+    # single noisy chunk can no longer flip this to AI_DETECTED.
+    if state == "alert": return "AI_DETECTED"
+    if state == "warn": return "SUSPICIOUS"
+    return "VERIFIED_HUMAN"
 
 def _check_key(x_api_key: Optional[str]):
     if x_api_key != API_KEY:
@@ -70,14 +103,22 @@ def health(): return {"status": "ok", "service": "voiceguard-api", "version": "0
 def analyze_chunk(body: AnalyzeIn, x_api_key: Optional[str] = Header(None)):
     _check_key(x_api_key)
     t0 = time.perf_counter()
-    score = _heuristic(body.lfcc, body.prosody)
-    # tiny jitter to look live
-    score = max(0, min(1, score))
+    raw = max(0, min(1, _heuristic(body.lfcc, body.prosody)))
+    sm = _session(body.session_id)
+    state = sm.update(raw)
+    score = sm.ema
     latency = (time.perf_counter()-t0)*1000
-    verdict = _verdict(score)
+    verdict = _verdict(state)
     # confidence is distance from threshold
     conf = abs(score - 0.5)*2
     return AnalyzeOut(riskScore=round(score,4), verdict=verdict, confidence=round(conf,3), latencyMs=round(latency,2))
+
+@app.post("/v1/reset/{session_id}", tags=["Scoring"])
+def reset_session(session_id: str, x_api_key: Optional[str] = Header(None)):
+    """Clear EMA/consecutive-window state for a session — call at the start of each new call."""
+    _check_key(x_api_key)
+    _SESSIONS.pop(session_id, None)
+    return {"reset": session_id}
 
 @app.post("/v1/alert", tags=["Alerting"])
 def alert(body: AlertIn, x_api_key: Optional[str] = Header(None)):

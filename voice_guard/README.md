@@ -23,9 +23,9 @@ Grant Phone/Mic + overlay permission in Settings. Use **Live Call → Demo Call*
 ### Backend integration artifact (judge-facing)
 ```bash
 cd voice_guard/backend
-pip install -r requirements.txt   # fastapi uvicorn pydantic
-uvicorn main:app --reload --port 8000  # docs at http://localhost:8000/docs
-# Android emulator reaches it at http://10.0.2.2:8000
+pip install -r requirements.txt   # fastapi uvicorn pydantic numpy
+uvicorn main:app --reload --port 8001  # docs at http://localhost:8001/docs
+# Android emulator reaches it at http://10.0.2.2:8001
 ```
 
 ### Web preview (for desktop browser verification — heuristic scorer only)

@@ -5,7 +5,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _protectionEnabled = true;
   bool _overlayEnabled = true;
   bool _soundEnabled = true;
-  double _sensitivity = 0.70; // threshold for AI DETECTED
+  double _sensitivity = 0.60; // alert threshold, matches engine_mock.py's ALERT_THRESHOLD
   bool _onboardingDone = false;
 
   bool get protectionEnabled => _protectionEnabled;
@@ -19,7 +19,7 @@ class SettingsProvider extends ChangeNotifier {
     _protectionEnabled = p.getBool('protectionEnabled') ?? true;
     _overlayEnabled = p.getBool('overlayEnabled') ?? true;
     _soundEnabled = p.getBool('soundEnabled') ?? true;
-    _sensitivity = p.getDouble('sensitivity') ?? 0.70;
+    _sensitivity = p.getDouble('sensitivity') ?? 0.60;
     _onboardingDone = p.getBool('onboardingDone') ?? false;
     notifyListeners();
   }

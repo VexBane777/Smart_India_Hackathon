@@ -40,13 +40,15 @@ class AudioPipeline {
     _scoreSub = audio.scoreStream.listen((raw) async {
       if (!context.mounted) return;
       final riskProvider = context.read<RiskScoreProvider>();
-      riskProvider.update(raw);
+      final settings = context.read<SettingsProvider>();
+      riskProvider.update(raw, alertThreshold: settings.sensitivity);
       final cur = riskProvider.current;
       if (cur == null) return;
       if (!context.mounted) return;
-      final settings = context.read<SettingsProvider>();
-      final threshold = settings.sensitivity;
-      if (cur.score > threshold) {
+      // Gate on the shared EMA + 2-consecutive-window alert state (master
+      // plan §6), not a single sample crossing threshold — matches the
+      // decision logic in vaani/app/engine_mock.py's AlertStateMachine.
+      if (riskProvider.isAlert) {
         if (settings.overlayEnabled) {
           try { await calls.showOverlay(riskScore: cur.score, verdict: cur.label); } catch (_) {}
         }

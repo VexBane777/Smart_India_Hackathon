@@ -6,7 +6,7 @@ import 'package:http/http.dart' as http;
 class ApiService {
   final String baseUrl;
   final String apiKey;
-  ApiService({this.baseUrl = 'http://10.0.2.2:8000', this.apiKey = 'vg_demo_key'});
+  ApiService({this.baseUrl = 'http://10.0.2.2:8001', this.apiKey = 'vg_demo_key'});
 
   Future<Map<String, dynamic>?> analyzeChunk({
     required List<double> lfcc,

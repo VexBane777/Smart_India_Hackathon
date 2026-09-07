@@ -8,11 +8,13 @@ The Android POC runs inference **on-device** (TFLite) for latency. This backend 
 
 ```bash
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-# docs → http://localhost:8000/docs
+uvicorn main:app --reload --port 8001
+# docs → http://localhost:8001/docs
 ```
 
-Android emulator reaches it at `http://10.0.2.2:8000` (see `ApiService.baseUrl`).
+Android emulator reaches it at `http://10.0.2.2:8001` (see `ApiService.baseUrl`). Port 8001,
+not 8000, so this can run alongside the Streamlit demo's FastAPI streamer
+(`vaani/app/server.py`), which already owns 8000.
 
 ## Auth
 
@@ -27,10 +29,17 @@ LFCC + prosody features → risk score. **Never raw audio** (privacy story).
 {
   "lfcc": [60 floats],
   "prosody": { "pauseRatio": 0.21, "energyVar": 0.013, "zcrVar": 0.008 },
-  "metadata": { "callerId": "+91...", "locale": "en-IN", "ts": "2026-09-07T..." }
+  "metadata": { "callerId": "+91...", "locale": "en-IN", "ts": "2026-09-07T..." },
+  "session_id": "call-123"
 }
 ```
 → `{ "riskScore": 0.83, "verdict": "AI_DETECTED", "confidence": 0.66, "latencyMs": 1.2 }`
+
+`session_id` groups chunks from one call so EMA + consecutive-window state
+carries across requests, same decision policy as `vaani/app/engine_mock.py`'s
+`AlertStateMachine` (master plan §6) — `AI_DETECTED` only fires after 2+
+consecutive high-risk windows, not a single noisy chunk. Call
+`POST /v1/reset/{session_id}` at the start of each new call.
 
 ### `POST /v1/alert`
 Webhook stub a downstream system subscribes to. In production fans out to SMS/email/SIEM.
