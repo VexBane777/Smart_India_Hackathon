@@ -49,25 +49,29 @@ def _load_mono_16k(path: Path) -> np.ndarray:
     return data.astype(np.float32)
 
 
-def _maybe_channel(pcm: np.ndarray, recipe: str | None) -> np.ndarray:
+def _maybe_channel(
+    pcm: np.ndarray, recipe: str | None, rng: np.random.Generator
+) -> np.ndarray:
     if recipe is None:
         return pcm
     from telechannel.pipeline import process_clip  # vaani package
 
-    return process_clip(pcm, recipe, SAMPLE_RATE)
+    return process_clip(pcm, recipe, SAMPLE_RATE, rng=rng)
 
 
 def build_examples(
     real_dir: Path,
     fake_dir: Path,
     channel_recipes: list[str | None] = (None,),
+    seed: int = 0,
 ) -> list[Example]:
+    rng = np.random.default_rng(seed)
     examples: list[Example] = []
     for label, directory in ((0, real_dir), (1, fake_dir)):
         for wav_path in sorted(Path(directory).glob("*.wav")):
             pcm = _load_mono_16k(wav_path)
             for recipe in channel_recipes:
-                degraded = _maybe_channel(pcm, recipe)
+                degraded = _maybe_channel(pcm, recipe, rng)
                 for chunk in chunk_audio(degraded):
                     examples.append(
                         Example(

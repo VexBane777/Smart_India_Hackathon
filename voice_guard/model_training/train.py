@@ -60,13 +60,17 @@ def main() -> None:
         nargs="*",
         default=[None],
         help="TeleChannel recipe names to degrade training audio through "
-        "(e.g. whatsapp volte cellular_3g); pass 'clean' or omit for none.",
+        "(e.g. whatsapp volte cellular_3g clean); omit for no channel "
+        "processing at all.",
     )
+    ap.add_argument("--seed", type=int, default=0, help="RNG seed for channel degradation.")
     args = ap.parse_args()
 
-    recipes = [None if r in (None, "clean") else r for r in args.channel]
+    recipes = list(args.channel)
     print(f"Building examples (channels={recipes})...")
-    examples = build_examples(args.real, args.fake, channel_recipes=recipes)
+    examples = build_examples(
+        args.real, args.fake, channel_recipes=recipes, seed=args.seed
+    )
     train_ex, val_ex = split_by_source(examples)
     print(f"{len(train_ex)} train windows / {len(val_ex)} val windows "
           f"from {len({e.source_file for e in examples})} source files")
