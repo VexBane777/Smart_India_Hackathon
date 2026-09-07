@@ -22,10 +22,13 @@ void main() async {
   final audio = AudioService(tflite);
   final notifications = NotificationService();
   final callStateProvider = CallStateProvider();
+  final riskScoreProvider = RiskScoreProvider();
 
   // Listen to native Android telecom call state changes
   calls.setCallStateCallback((status, number) {
     if (status == 'active') {
+      audio.clearBuffer();
+      audio.startScoring();
       callStateProvider.setStatus(CallStatus.active, number: number);
     } else if (status == 'dialing') {
       callStateProvider.setStatus(CallStatus.dialing, number: number);
@@ -34,6 +37,7 @@ void main() async {
     } else if (status == 'holding') {
       callStateProvider.setStatus(CallStatus.holding, number: number);
     } else if (status == 'disconnected') {
+      audio.stopScoring();
       callStateProvider.setStatus(CallStatus.disconnected, number: number);
     } else {
       callStateProvider.setStatus(CallStatus.idle);
@@ -52,7 +56,7 @@ void main() async {
       providers: [
         ChangeNotifierProvider.value(value: settings),
         ChangeNotifierProvider.value(value: callStateProvider),
-        ChangeNotifierProvider(create: (_) => RiskScoreProvider()),
+        ChangeNotifierProvider.value(value: riskScoreProvider),
         Provider<TFLiteService>.value(value: tflite),
         Provider<CallService>.value(value: calls),
         Provider<AudioService>.value(value: audio),

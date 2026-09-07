@@ -50,6 +50,9 @@ class MainActivity : FlutterActivity() {
                     AudioCaptureManager.stop()
                     result.success(null)
                 }
+                "getLastRecordingPath" -> {
+                    result.success(AudioCaptureManager.lastRecordingPath)
+                }
                 "placeCall" -> {
                     val number = call.argument<String>("number") ?: ""
                     try {

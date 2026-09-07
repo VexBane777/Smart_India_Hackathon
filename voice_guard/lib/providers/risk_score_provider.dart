@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import '../models/risk_score.dart';
+import '../models/call_log.dart';
 
 class RiskScoreProvider extends ChangeNotifier {
   RiskScore? _current;
@@ -28,8 +29,17 @@ class RiskScoreProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  final List<CallLog> _callLogs = [];
+  List<CallLog> get callLogs => List.unmodifiable(_callLogs);
+
+  void addCallLog(CallLog log) {
+    _callLogs.insert(0, log);
+    notifyListeners();
+  }
+
   void clearHistory() {
     _history.clear();
+    _callLogs.clear();
     _current = null;
     _ema = 0.15;
     notifyListeners();

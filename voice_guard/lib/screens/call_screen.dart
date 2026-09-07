@@ -11,6 +11,8 @@ import '../widgets/risk_meter.dart';
 import '../widgets/waveform_visualizer.dart';
 import '../utils/constants.dart';
 import '../models/call_state.dart';
+import '../models/call_log.dart';
+import '../models/risk_score.dart';
 
 class CallScreen extends StatefulWidget {
   const CallScreen({super.key});
@@ -22,6 +24,8 @@ class _CallScreenState extends State<CallScreen> {
   String _dialNumber = '';
   bool _speakerphoneOn = false;
   bool _liveMicActive = false;
+  bool _isDefaultDialer = false;
+  DateTime? _callStartTime;
   List<double> _liveWaveform = const [];
   StreamSubscription<double>? _scoreSub;
   StreamSubscription<List<double>>? _pcmSub;
@@ -31,7 +35,32 @@ class _CallScreenState extends State<CallScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bindPipeline();
+      _checkDefaultDialer();
     });
+  }
+
+  Future<void> _checkDefaultDialer() async {
+    final calls = context.read<CallService>();
+    final isDef = await calls.isDefaultDialer();
+    if (mounted) setState(() => _isDefaultDialer = isDef);
+  }
+
+  Future<void> _requestDefaultDialer() async {
+    final calls = context.read<CallService>();
+    await calls.setAsDefaultDialer();
+    await Future.delayed(const Duration(milliseconds: 1200));
+    final isDef = await calls.isDefaultDialer();
+    if (mounted) {
+      setState(() => _isDefaultDialer = isDef);
+      if (isDef) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Color(0xFF2E7D32),
+            content: Text('Vaani is now your default phone dialer!'),
+          ),
+        );
+      }
+    }
   }
 
   void _bindPipeline() {
@@ -87,6 +116,7 @@ class _CallScreenState extends State<CallScreen> {
     final callState = context.read<CallStateProvider>();
     final risk = context.read<RiskScoreProvider>();
 
+    _callStartTime = DateTime.now();
     risk.reset();
     audio.clearBuffer();
     audio.startScoring();
@@ -104,19 +134,17 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _toggleLiveMic() async {
-    final calls = context.read<CallService>();
-    final audio = context.read<AudioService>();
-    final callState = context.read<CallStateProvider>();
-    final risk = context.read<RiskScoreProvider>();
-
     if (_liveMicActive) {
-      // Stop
-      setState(() => _liveMicActive = false);
-      audio.stopScoring();
-      await calls.stopCallDetection();
-      callState.setStatus(CallStatus.idle);
+      // Stop live mic and finalize recording + log
+      await _endCall();
     } else {
-      // Start
+      // Start live mic test
+      final calls = context.read<CallService>();
+      final audio = context.read<AudioService>();
+      final callState = context.read<CallStateProvider>();
+      final risk = context.read<RiskScoreProvider>();
+
+      _callStartTime = DateTime.now();
       setState(() => _liveMicActive = true);
       risk.reset();
       audio.clearBuffer();
@@ -130,6 +158,12 @@ class _CallScreenState extends State<CallScreen> {
     final calls = context.read<CallService>();
     final audio = context.read<AudioService>();
     final callState = context.read<CallStateProvider>();
+    final risk = context.read<RiskScoreProvider>();
+
+    final duration = _callStartTime != null
+        ? DateTime.now().difference(_callStartTime!)
+        : Duration.zero;
+    _callStartTime = null;
 
     setState(() {
       _liveMicActive = false;
@@ -139,6 +173,28 @@ class _CallScreenState extends State<CallScreen> {
     await calls.endCall();
     await calls.stopCallDetection();
     await calls.hideOverlay();
+
+    // Small delay to allow AudioCaptureManager to flush and close WAV file
+    await Future.delayed(const Duration(milliseconds: 300));
+    final recPath = await calls.getLastRecordingPath();
+    final curRisk = risk.current;
+    final score = curRisk?.score ?? 0.05;
+    final verdict = curRisk?.verdict ??
+        (score >= 0.70
+            ? Verdict.detected
+            : (score >= 0.30 ? Verdict.suspicious : Verdict.verified));
+
+    final log = CallLog(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      timestamp: DateTime.now(),
+      number: callState.state.number ?? (_dialNumber.isNotEmpty ? _dialNumber : 'Live Acoustic Scan'),
+      riskScore: score,
+      verdict: verdict,
+      duration: duration,
+      recordingPath: recPath,
+    );
+    risk.addCallLog(log);
+
     callState.setStatus(CallStatus.disconnected);
     Future.delayed(const Duration(milliseconds: 600), () {
       if (mounted) callState.setStatus(CallStatus.idle);
@@ -335,6 +391,51 @@ class _CallScreenState extends State<CallScreen> {
   Widget _buildDialpadView() {
     return Column(
       children: [
+        if (!_isDefaultDialer)
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.shield_outlined, color: AppColors.primary, size: 22),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Set Vaani as Default Phone App',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.primary),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Enables native in-call detection & audio recording',
+                        style: TextStyle(fontSize: 10, color: Colors.black54),
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(
+                  onPressed: _requestDefaultDialer,
+                  style: TextButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('Set Default', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ),
+          ),
+
         // Number display box
         Expanded(
           flex: 2,
