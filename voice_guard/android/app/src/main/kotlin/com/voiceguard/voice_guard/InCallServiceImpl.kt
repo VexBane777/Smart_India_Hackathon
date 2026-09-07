@@ -4,44 +4,78 @@ import android.telecom.Call
 import android.telecom.InCallService
 import android.util.Log
 
-/**
- * Intercepts telecom calls. On STATE_ACTIVE starts AudioCaptureManager;
- * on STATE_DISCONNECTED / onCallRemoved stops it.
- * Real call audio via VOICE_CALL is blocked on Android 10+ for non-system apps,
- * so this POC captures via MIC (caller must use speakerphone for demo).
- */
 class InCallServiceImpl : InCallService() {
-    companion object { private const val TAG = "InCallServiceImpl" }
+    companion object {
+        private const val TAG = "InCallServiceImpl"
+        private var activeCall: Call? = null
+
+        fun endCurrentCall() {
+            try {
+                activeCall?.disconnect()
+                activeCall = null
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to disconnect call", e)
+            }
+        }
+    }
+
+    private fun mapState(state: Int): String {
+        return when (state) {
+            Call.STATE_DIALING, Call.STATE_CONNECTING -> "dialing"
+            Call.STATE_RINGING -> "incoming"
+            Call.STATE_ACTIVE -> "active"
+            Call.STATE_HOLDING -> "holding"
+            Call.STATE_DISCONNECTED, Call.STATE_DISCONNECTING -> "disconnected"
+            else -> "idle"
+        }
+    }
+
+    private fun handleState(call: Call, state: Int) {
+        val number = call.details.handle?.schemeSpecificPart ?: "Unknown"
+        val status = mapState(state)
+        Log.i(TAG, "Call state changed: $status ($state) for $number")
+        MainActivity.notifyCallState(status, number)
+
+        when (state) {
+            Call.STATE_ACTIVE -> {
+                Log.i(TAG, "Call active — starting audio capture")
+                AudioCaptureManager.start(this)
+            }
+            Call.STATE_DISCONNECTED, Call.STATE_DISCONNECTING -> {
+                Log.i(TAG, "Call disconnected — stopping audio capture")
+                AudioCaptureManager.stop()
+                if (activeCall == call) {
+                    activeCall = null
+                }
+            }
+            else -> {}
+        }
+    }
 
     private val callback = object : Call.Callback() {
         override fun onStateChanged(call: Call, state: Int) {
-            when (state) {
-                Call.STATE_ACTIVE -> {
-                    Log.i(TAG, "Call active — starting capture")
-                    AudioCaptureManager.start(this@InCallServiceImpl) { _ -> }
-                }
-                Call.STATE_DISCONNECTED, Call.STATE_DISCONNECTING -> {
-                    Log.i(TAG, "Call ended — stopping capture")
-                    AudioCaptureManager.stop()
-                }
-                else -> {}
-            }
+            handleState(call, state)
         }
     }
 
     override fun onCallAdded(call: Call) {
         super.onCallAdded(call)
-        Log.i(TAG, "onCallAdded: ${call.details.handle}")
+        activeCall = call
+        val number = call.details.handle?.schemeSpecificPart ?: "Unknown"
+        Log.i(TAG, "onCallAdded: $number, initial state: ${call.state}")
         call.registerCallback(callback)
-        if (call.state == Call.STATE_ACTIVE) {
-            AudioCaptureManager.start(this) { _ -> }
-        }
+        handleState(call, call.state)
     }
 
     override fun onCallRemoved(call: Call) {
         super.onCallRemoved(call)
         Log.i(TAG, "onCallRemoved")
         call.unregisterCallback(callback)
+        handleState(call, Call.STATE_DISCONNECTED)
         AudioCaptureManager.stop()
+        if (activeCall == call) {
+            activeCall = null
+        }
     }
 }
+

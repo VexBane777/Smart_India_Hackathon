@@ -17,8 +17,10 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, methodChannel).setMethodCallHandler { call, result ->
+        instance = this
+        val mc = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, methodChannel)
+        channel = mc
+        mc.setMethodCallHandler { call, result ->
             when (call.method) {
                 "isDefaultDialer" -> {
                     result.success(isDefaultDialer())
@@ -47,6 +49,35 @@ class MainActivity : FlutterActivity() {
                 "stopCallDetection" -> {
                     AudioCaptureManager.stop()
                     result.success(null)
+                }
+                "placeCall" -> {
+                    val number = call.argument<String>("number") ?: ""
+                    try {
+                        val hasPerm = checkSelfPermission(android.Manifest.permission.CALL_PHONE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        val intent = if (hasPerm) {
+                            Intent(Intent.ACTION_CALL, Uri.parse("tel:${Uri.encode(number)}")).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                        } else {
+                            Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(number)}")).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                        }
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("CALL_FAILED", e.message, null)
+                    }
+                }
+                "endCall" -> {
+                    InCallServiceImpl.endCurrentCall()
+                    result.success(null)
+                }
+                "toggleSpeakerphone" -> {
+                    val enable = call.argument<Boolean>("enable") ?: true
+                    val am = getSystemService(android.media.AudioManager::class.java)
+                    am.isSpeakerphoneOn = enable
+                    result.success(am.isSpeakerphoneOn)
                 }
                 "showOverlay" -> {
                     val score = (call.argument<Double>("riskScore") ?: 0.0)
@@ -98,4 +129,24 @@ class MainActivity : FlutterActivity() {
             startActivity(intent)
         }
     }
+
+    companion object {
+        var instance: MainActivity? = null
+        var channel: MethodChannel? = null
+
+        fun notifyCallState(status: String, number: String?) {
+            instance?.runOnUiThread {
+                channel?.invokeMethod("onCallStateChanged", mapOf("status" to status, "number" to number))
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (instance == this) {
+            instance = null
+            channel = null
+        }
+    }
 }
+

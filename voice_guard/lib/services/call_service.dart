@@ -27,6 +27,45 @@ class CallService {
     }
   }
 
+  void setCallStateCallback(void Function(String status, String? number) cb) {
+    _method.setMethodCallHandler((call) async {
+      if (call.method == 'onCallStateChanged') {
+        final args = call.arguments is Map ? call.arguments as Map : null;
+        final status = args?['status'] as String? ?? 'idle';
+        final number = args?['number'] as String?;
+        cb(status, number);
+      }
+    });
+  }
+
+  Future<bool> placeCall(String number) async {
+    try {
+      final res = await _method.invokeMethod<bool>('placeCall', {'number': number});
+      return res ?? false;
+    } catch (e) {
+      debugPrint('placeCall failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> endCall() async {
+    try {
+      await _method.invokeMethod('endCall');
+    } catch (e) {
+      debugPrint('endCall failed: $e');
+    }
+  }
+
+  Future<bool> toggleSpeakerphone(bool enable) async {
+    try {
+      final res = await _method.invokeMethod<bool>('toggleSpeakerphone', {'enable': enable});
+      return res ?? false;
+    } catch (e) {
+      debugPrint('toggleSpeakerphone failed: $e');
+      return false;
+    }
+  }
+
   Future<void> startCallDetection() async {
     try {
       await _method.invokeMethod('startCallDetection');

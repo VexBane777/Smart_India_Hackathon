@@ -1,4 +1,4 @@
-enum CallStatus { idle, ringing, active, disconnected }
+enum CallStatus { idle, dialing, ringing, incoming, active, holding, disconnected }
 
 class CallState {
   final CallStatus status;
@@ -28,4 +28,9 @@ class CallState {
 
   bool get isActive => status == CallStatus.active;
   bool get isIdle => status == CallStatus.idle;
+  bool get isDialing => status == CallStatus.dialing;
+  bool get isRinging => status == CallStatus.ringing;
+  bool get isIncoming => status == CallStatus.incoming;
+  bool get isHolding => status == CallStatus.holding;
+  bool get isConnected => status == CallStatus.active || status == CallStatus.holding;
 }
