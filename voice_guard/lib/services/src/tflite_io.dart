@@ -11,10 +11,18 @@ class TFLiteService {
 
   Future<void> init() async {
     try {
+      _interpreter = await Interpreter.fromAsset('assets/models/voice_detector.tflite');
+      _inputShape = _interpreter!.getInputTensor(0).shape;
+      _ready = true;
+      debugPrint('TFLite model loaded from assets/models, input shape: $_inputShape');
+      return;
+    } catch (_) {}
+
+    try {
       _interpreter = await Interpreter.fromAsset('models/voice_detector.tflite');
       _inputShape = _interpreter!.getInputTensor(0).shape;
       _ready = true;
-      debugPrint('TFLite model loaded, input shape: $_inputShape');
+      debugPrint('TFLite model loaded from models, input shape: $_inputShape');
     } catch (e) {
       debugPrint('TFLite model not found — using heuristic scorer: $e');
       _ready = false;

@@ -25,17 +25,27 @@ object AudioCaptureManager {
 
     fun setSink(s: ((ByteArray) -> Unit)?) { sink = s }
 
-    fun start(context: Context, onBytes: (ByteArray) -> Unit) {
+    fun start(context: Context, onBytes: ((ByteArray) -> Unit)? = null) {
+        if (onBytes != null) {
+            sink = onBytes
+        }
         if (running) return
-        sink = onBytes
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
         if (minBuf <= 0) { Log.e(TAG, "Invalid min buffer size: $minBuf"); return }
         val bufSize = minBuf * 4
         try {
-            recorder = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                SAMPLE_RATE, CHANNEL, ENCODING, bufSize
-            )
+            // VOICE_COMMUNICATION activates hardware AEC & beamforming for calls; fallback to MIC
+            recorder = try {
+                AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                    SAMPLE_RATE, CHANNEL, ENCODING, bufSize
+                )
+            } catch (_: Exception) {
+                AudioRecord(
+                    MediaRecorder.AudioSource.MIC,
+                    SAMPLE_RATE, CHANNEL, ENCODING, bufSize
+                )
+            }
         } catch (e: Exception) {
             Log.e(TAG, "AudioRecord creation failed", e); return
         }

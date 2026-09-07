@@ -4,6 +4,9 @@ import 'package:provider/provider.dart';
 import '../providers/call_state_provider.dart';
 import '../providers/risk_score_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/call_service.dart';
+import '../services/audio_service.dart';
+import '../services/notification_service.dart';
 import '../widgets/risk_meter.dart';
 import '../widgets/waveform_visualizer.dart';
 import '../utils/constants.dart';
@@ -16,41 +19,145 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
-  Timer? _demoTimer;
-  double _demoScore = 0.12;
+  String _dialNumber = '';
+  bool _speakerphoneOn = false;
+  bool _liveMicActive = false;
+  List<double> _liveWaveform = const [];
+  StreamSubscription<double>? _scoreSub;
+  StreamSubscription<List<double>>? _pcmSub;
 
   @override
   void initState() {
     super.initState();
-    // Demo mode: animate risk for judges without a real call
-    _demoTimer = Timer.periodic(const Duration(milliseconds: 900), (_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _bindPipeline();
+    });
+  }
+
+  void _bindPipeline() {
+    final audio = context.read<AudioService>();
+    final riskProvider = context.read<RiskScoreProvider>();
+    final settings = context.read<SettingsProvider>();
+    final calls = context.read<CallService>();
+    final notifs = context.read<NotificationService>();
+
+    _scoreSub = audio.scoreStream.listen((score) async {
       if (!mounted) return;
-      final callActive = context.read<CallStateProvider>().state.isActive;
-      if (!callActive) return;
-      // oscillate demo
-      _demoScore = (_demoScore + 0.07) % 1.0;
-      // occasionally spike to red for demo
-      final spike = (_demoScore > 0.85) ? 0.92 : _demoScore;
-      context.read<RiskScoreProvider>().update(spike.clamp(0.05, 0.95));
-      final threshold = context.read<SettingsProvider>().sensitivity;
-      if (spike > threshold && context.read<SettingsProvider>().overlayEnabled) {
-        // overlay would be triggered via CallService in real flow
+      riskProvider.update(score);
+      final cur = riskProvider.current;
+      if (cur != null && cur.score > settings.sensitivity) {
+        if (settings.overlayEnabled) {
+          try { await calls.showOverlay(riskScore: cur.score, verdict: cur.label); } catch (_) {}
+        }
+        if (settings.soundEnabled) {
+          try { await notifs.showRiskAlert(score: cur.score, verdict: cur.label); } catch (_) {}
+        }
       }
+    });
+
+    _pcmSub = audio.pcmStream.listen((samples) {
+      if (!mounted) return;
+      setState(() => _liveWaveform = samples);
     });
   }
 
   @override
   void dispose() {
-    _demoTimer?.cancel();
+    _scoreSub?.cancel();
+    _pcmSub?.cancel();
     super.dispose();
+  }
+
+  void _onDigitPress(String digit) {
+    if (_dialNumber.length < 15) {
+      setState(() => _dialNumber += digit);
+    }
+  }
+
+  void _onBackspace() {
+    if (_dialNumber.isNotEmpty) {
+      setState(() => _dialNumber = _dialNumber.substring(0, _dialNumber.length - 1));
+    }
+  }
+
+  Future<void> _startOutgoingCall() async {
+    if (_dialNumber.trim().isEmpty) return;
+    final calls = context.read<CallService>();
+    final audio = context.read<AudioService>();
+    final callState = context.read<CallStateProvider>();
+    final risk = context.read<RiskScoreProvider>();
+
+    risk.reset();
+    audio.clearBuffer();
+    audio.startScoring();
+    callState.setStatus(CallStatus.dialing, number: _dialNumber);
+
+    await calls.startCallDetection();
+    final placed = await calls.placeCall(_dialNumber);
+    if (!placed) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not initiate carrier call. Please verify phone permissions.')),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleLiveMic() async {
+    final calls = context.read<CallService>();
+    final audio = context.read<AudioService>();
+    final callState = context.read<CallStateProvider>();
+    final risk = context.read<RiskScoreProvider>();
+
+    if (_liveMicActive) {
+      // Stop
+      setState(() => _liveMicActive = false);
+      audio.stopScoring();
+      await calls.stopCallDetection();
+      callState.setStatus(CallStatus.idle);
+    } else {
+      // Start
+      setState(() => _liveMicActive = true);
+      risk.reset();
+      audio.clearBuffer();
+      audio.startScoring();
+      callState.setStatus(CallStatus.active, number: 'Live Acoustic Scanner');
+      await calls.startCallDetection();
+    }
+  }
+
+  Future<void> _endCall() async {
+    final calls = context.read<CallService>();
+    final audio = context.read<AudioService>();
+    final callState = context.read<CallStateProvider>();
+
+    setState(() {
+      _liveMicActive = false;
+      _speakerphoneOn = false;
+    });
+    audio.stopScoring();
+    await calls.endCall();
+    await calls.stopCallDetection();
+    await calls.hideOverlay();
+    callState.setStatus(CallStatus.disconnected);
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) callState.setStatus(CallStatus.idle);
+    });
+  }
+
+  Future<void> _toggleSpeakerphone() async {
+    final calls = context.read<CallService>();
+    final next = !_speakerphoneOn;
+    final res = await calls.toggleSpeakerphone(next);
+    setState(() => _speakerphoneOn = res);
   }
 
   @override
   Widget build(BuildContext context) {
     final call = context.watch<CallStateProvider>();
     final risk = context.watch<RiskScoreProvider>().current;
-    final score = risk?.score ?? 0.12;
-    final isActive = call.state.isActive;
+    final score = risk?.score ?? 0.05;
+    final isCallInProgress = call.state.isActive || call.state.isDialing || call.state.isIncoming || _liveMicActive;
     final verdict = risk?.label ?? AppConstants.verdictFor(score);
     final color = risk?.color ?? AppConstants.colorFor(score);
 
@@ -59,127 +166,316 @@ class _CallScreenState extends State<CallScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        title: const Text('Live Call', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        title: Text(isCallInProgress ? 'Active Call Detection' : 'Dialer & Live Detection',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
         actions: [
-          if (!isActive)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: FilledButton.icon(
-                onPressed: () {
-                  context.read<CallStateProvider>().setStatus(CallStatus.active, number: '+91 98XXXX XX10');
-                  context.read<RiskScoreProvider>().reset();
-                },
-                icon: const Icon(Icons.play_arrow, size: 18),
-                label: const Text('Demo Call', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-                style: FilledButton.styleFrom(backgroundColor: AppColors.primary, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
-              ),
-            ),
+          IconButton(
+            tooltip: _liveMicActive ? 'Stop Live Mic' : 'Start Live Mic Test',
+            icon: Icon(_liveMicActive ? Icons.mic : Icons.mic_none, color: _liveMicActive ? AppColors.detected : AppColors.primary),
+            onPressed: _toggleLiveMic,
+          ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          // Caller card
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12)]),
-            child: Row(children: [
-              CircleAvatar(radius: 26, backgroundColor: AppColors.primary.withValues(alpha: 0.12), child: const Icon(Icons.person, color: AppColors.primary)),
-              const SizedBox(width: 12),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(call.state.number ?? 'No active call', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 2),
-                Text(isActive ? 'Ongoing • ${call.elapsedLabel}' : 'Tap "Demo Call" to simulate a live call',
-                    style: TextStyle(fontSize: 11, color: Colors.black.withValues(alpha: 0.6))),
-              ])),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(color: isActive ? AppColors.verifiedBg : const Color(0xFFEEEEEE), borderRadius: BorderRadius.circular(999)),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Container(width: 7, height: 7, decoration: BoxDecoration(color: isActive ? AppColors.verified : Colors.grey, shape: BoxShape.circle)),
-                  const SizedBox(width: 6),
-                  Text(isActive ? 'ACTIVE' : 'IDLE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: isActive ? AppColors.verified : Colors.black54)),
-                ]),
-              ),
-            ]),
+      body: isCallInProgress
+          ? _buildActiveCallView(call: call, score: score, verdict: verdict, color: color)
+          : _buildDialpadView(),
+    );
+  }
+
+  // ---- VIEW 1: ACTIVE CALL & REAL-TIME INFERENCE ----
+  Widget _buildActiveCallView({
+    required CallStateProvider call,
+    required double score,
+    required String verdict,
+    required Color color,
+  }) {
+    final audio = context.read<AudioService>();
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        // Caller card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12)],
           ),
-          const SizedBox(height: 14),
-          RiskMeter(score: score),
-          const SizedBox(height: 14),
-          // Verdict banner
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: color.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(12), border: Border.all(color: color.withValues(alpha: 0.25))),
-            child: Row(children: [
-              Icon(verdict == 'AI DETECTED' ? Icons.warning_rounded : verdict == 'SUSPICIOUS' ? Icons.error_outline : Icons.verified_user_rounded, color: color),
-              const SizedBox(width: 10),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(verdict, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color)),
-                const SizedBox(height: 2),
-                Text(_adviceFor(verdict), style: TextStyle(fontSize: 11, color: Colors.black.withValues(alpha: 0.65), height: 1.3)),
-              ])),
-            ]),
-          ),
-          const SizedBox(height: 14),
-          // Waveform
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.black12)),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                const Text('Live Audio', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-                const Spacer(),
-                Text(isActive ? '16 kHz • LFCC 60 • Prosody' : 'Idle — demo animates on Active',
-                    style: TextStyle(fontSize: 10, color: Colors.black.withValues(alpha: 0.5))),
-              ]),
-              const SizedBox(height: 10),
-              WaveformVisualizer(color: color),
-              const SizedBox(height: 8),
-              Text('Features extracted on-device every 1s (3s window) → TFLite risk score. Raw PCM discarded after inference.',
-                  style: TextStyle(fontSize: 10, color: Colors.black.withValues(alpha: 0.5), height: 1.3)),
-            ]),
-          ),
-          const SizedBox(height: 14),
-          if (isActive)
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  context.read<CallStateProvider>().setStatus(CallStatus.disconnected);
-                  Future.delayed(const Duration(milliseconds: 300), () {
-                    if (context.mounted) context.read<CallStateProvider>().setStatus(CallStatus.idle);
-                  });
-                },
-                icon: const Icon(Icons.call_end, color: AppColors.detected),
-                label: const Text('End Demo Call', style: TextStyle(color: AppColors.detected, fontWeight: FontWeight.w700)),
-                style: OutlinedButton.styleFrom(side: const BorderSide(color: AppColors.detected), padding: const EdgeInsets.symmetric(vertical: 12)),
-              ),
+          child: Row(children: [
+            CircleAvatar(
+              radius: 26,
+              backgroundColor: color.withValues(alpha: 0.15),
+              child: Icon(Icons.person, color: color, size: 28),
             ),
-          if (score > 0.70)
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(call.state.number ?? (_dialNumber.isNotEmpty ? _dialNumber : 'Active Call'),
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 2),
+              Text(call.state.isDialing ? 'Dialing...' : 'Connected • ${call.elapsedLabel}',
+                  style: TextStyle(fontSize: 12, color: Colors.black.withValues(alpha: 0.6))),
+            ])),
             Container(
-              margin: const EdgeInsets.only(top: 12),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: AppColors.detectedBg, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.detected.withValues(alpha: 0.3))),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Row(children: [Icon(Icons.warning_amber_rounded, color: AppColors.detected, size: 18), SizedBox(width: 6), Text('Recommended Action', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.detected))]),
-                const SizedBox(height: 6),
-                Text('• Do NOT share OTP, passwords, or authorize transfers on this call.\n• Hang up and call back on a known number.\n• Escalate to supervisor / trigger MFA via the app.',
-                    style: TextStyle(fontSize: 11, color: Colors.black.withValues(alpha: 0.7), height: 1.4)),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(999)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                const SizedBox(width: 6),
+                Text(verdict == 'AI DETECTED' ? 'ALERT' : 'LIVE',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: color)),
               ]),
             ),
-        ],
+          ]),
+        ),
+        const SizedBox(height: 14),
+
+        // Live Risk Meter (TFLite Inference)
+        RiskMeter(score: score),
+        const SizedBox(height: 14),
+
+        // Live Verdict Banner
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color.withValues(alpha: 0.25)),
+          ),
+          child: Row(children: [
+            Icon(verdict == 'AI DETECTED' ? Icons.warning_rounded : verdict == 'SUSPICIOUS' ? Icons.error_outline : Icons.verified_user_rounded, color: color, size: 28),
+            const SizedBox(width: 10),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(verdict, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: color)),
+              const SizedBox(height: 2),
+              Text(_adviceFor(verdict), style: TextStyle(fontSize: 11, color: Colors.black.withValues(alpha: 0.7), height: 1.3)),
+            ])),
+          ]),
+        ),
+        const SizedBox(height: 14),
+
+        // Live Audio Waveform (Driven by real 16kHz microphone stream)
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.black12)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Text('Live Microphone Audio Stream', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              Text('16 kHz • 60 LFCC • LiteRT Model', style: TextStyle(fontSize: 10, color: Colors.black.withValues(alpha: 0.5))),
+            ]),
+            const SizedBox(height: 10),
+            WaveformVisualizer(samples: _liveWaveform, color: color),
+            const SizedBox(height: 8),
+            Text('Evaluating 60-band spectral filterbanks + prosody every 1s on-device via TFLite.',
+                style: TextStyle(fontSize: 10, color: Colors.black.withValues(alpha: 0.55))),
+          ]),
+        ),
+        const SizedBox(height: 16),
+
+        // Quick Benchmark Injection (For instant testing without phone calls)
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.black12)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Benchmark Model Verification', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.textSecondary)),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => audio.injectBenchmarkTest(isAiVoice: false),
+                  icon: const Icon(Icons.check_circle_outline, color: AppColors.verified, size: 16),
+                  label: const Text('Human Speech', style: TextStyle(fontSize: 11, color: AppColors.verified)),
+                  style: OutlinedButton.styleFrom(side: const BorderSide(color: AppColors.verified)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => audio.injectBenchmarkTest(isAiVoice: true),
+                  icon: const Icon(Icons.warning_amber_rounded, color: AppColors.detected, size: 16),
+                  label: const Text('AI Clone Audio', style: TextStyle(fontSize: 11, color: AppColors.detected)),
+                  style: OutlinedButton.styleFrom(side: const BorderSide(color: AppColors.detected)),
+                ),
+              ),
+            ]),
+          ]),
+        ),
+        const SizedBox(height: 20),
+
+        // In-Call Action Bar (Speakerphone, Mute, End Call)
+        Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+          _circleAction(
+            icon: _speakerphoneOn ? Icons.volume_up : Icons.volume_down,
+            label: _speakerphoneOn ? 'Speaker On' : 'Speaker Off',
+            color: _speakerphoneOn ? AppColors.primary : Colors.black54,
+            bg: _speakerphoneOn ? AppColors.primary.withValues(alpha: 0.12) : const Color(0xFFF0F0F0),
+            onTap: _toggleSpeakerphone,
+          ),
+          _circleAction(
+            icon: Icons.call_end,
+            label: 'End Call',
+            color: Colors.white,
+            bg: AppColors.detected,
+            size: 64,
+            onTap: _endCall,
+          ),
+          _circleAction(
+            icon: _liveMicActive ? Icons.mic : Icons.mic_off,
+            label: _liveMicActive ? 'Mic Active' : 'Mic Mute',
+            color: _liveMicActive ? AppColors.primary : Colors.black54,
+            bg: _liveMicActive ? AppColors.primary.withValues(alpha: 0.12) : const Color(0xFFF0F0F0),
+            onTap: _toggleLiveMic,
+          ),
+        ]),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  // ---- VIEW 2: INTERACTIVE DIALPAD ----
+  Widget _buildDialpadView() {
+    return Column(
+      children: [
+        // Number display box
+        Expanded(
+          flex: 2,
+          child: Container(
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Text(
+                _dialNumber.isEmpty ? 'Enter Number' : _dialNumber,
+                style: TextStyle(
+                  fontSize: _dialNumber.length > 10 ? 28 : 34,
+                  fontWeight: FontWeight.w800,
+                  color: _dialNumber.isEmpty ? Colors.black38 : AppColors.textPrimary,
+                  letterSpacing: 1.5,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              Text('Vaani will monitor audio via on-device TFLite',
+                  style: TextStyle(fontSize: 12, color: Colors.black.withValues(alpha: 0.5))),
+            ]),
+          ),
+        ),
+
+        // Dialpad Grid (0-9, *, #)
+        Expanded(
+          flex: 6,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: Column(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+              _dialRow(['1', '2', '3'], ['', 'ABC', 'DEF']),
+              _dialRow(['4', '5', '6'], ['GHI', 'JKL', 'MNO']),
+              _dialRow(['7', '8', '9'], ['PQRS', 'TUV', 'WXYZ']),
+              _dialRow(['*', '0', '#'], ['', '+', '']),
+            ]),
+          ),
+        ),
+
+        // Bottom action row: Live Mic Test, Call Button, Backspace
+        Padding(
+          padding: const EdgeInsets.only(bottom: 24, left: 32, right: 32),
+          child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+            // Live Mic mode button
+            IconButton(
+              tooltip: 'Start Live Mic Acoustic Test',
+              icon: const Icon(Icons.mic, size: 28, color: AppColors.primary),
+              onPressed: _toggleLiveMic,
+            ),
+
+            // Big Green Call Button
+            GestureDetector(
+              onTap: _startOutgoingCall,
+              child: Container(
+                width: 68,
+                height: 68,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF2E7D32),
+                  shape: BoxShape.circle,
+                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))],
+                ),
+                child: const Icon(Icons.phone, color: Colors.white, size: 32),
+              ),
+            ),
+
+            // Backspace button
+            IconButton(
+              tooltip: 'Delete',
+              icon: const Icon(Icons.backspace_outlined, size: 28, color: Colors.black54),
+              onPressed: _onBackspace,
+              onLongPress: () => setState(() => _dialNumber = ''),
+            ),
+          ]),
+        ),
+      ],
+    );
+  }
+
+  Widget _dialRow(List<String> digits, List<String> subs) {
+    return Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+      for (int i = 0; i < 3; i++)
+        _dialKey(digits[i], subs[i]),
+    ]);
+  }
+
+  Widget _dialKey(String digit, String sub) {
+    return InkWell(
+      onTap: () => _onDigitPress(digit),
+      onLongPress: digit == '0' ? () => _onDigitPress('+') : null,
+      borderRadius: BorderRadius.circular(40),
+      child: Container(
+        width: 72,
+        height: 72,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6)],
+        ),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Text(digit, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+          if (sub.isNotEmpty)
+            Text(sub, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Colors.black45, letterSpacing: 1.0)),
+        ]),
       ),
     );
+  }
+
+  Widget _circleAction({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required Color bg,
+    double size = 52,
+    required VoidCallback onTap,
+  }) {
+    return Column(children: [
+      InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(size / 2),
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
+          child: Icon(icon, color: color, size: size * 0.48),
+        ),
+      ),
+      const SizedBox(height: 6),
+      Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.black54)),
+    ]);
   }
 
   String _adviceFor(String verdict) {
     switch (verdict) {
       case 'AI DETECTED':
-        return 'High likelihood of synthetic voice — do not disclose sensitive info. Call back on a verified number.';
+        return 'High probability of synthetic/cloned speech. Do NOT share OTP or passwords. Hang up and verify through an independent channel.';
       case 'SUSPICIOUS':
-        return 'Unusual vocal traits detected — verify identity via a second channel before acting.';
+        return 'Vocal anomalies or acoustic distortions detected. Request verification before sharing credentials.';
       default:
-        return 'Voice traits consistent with a live human speaker at this moment.';
+        return 'Acoustic parameters match natural human vocal tract dynamics.';
     }
   }
 }
+
