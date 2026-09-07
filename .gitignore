@@ -31,3 +31,15 @@ venv/
 
 # Superpowers worktree fallback
 .worktrees/
+
+# Flutter / Android / Scratch
+**/build/
+**/.dart_tool/
+**/.flutter-plugins*
+**/android/local.properties
+**/.gradle/
+**/.idea/
+**/.kotlin/
+*.iml
+_*.txt
+fix_*.py
