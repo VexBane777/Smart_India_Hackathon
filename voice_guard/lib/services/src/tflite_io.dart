@@ -39,9 +39,13 @@ class TFLiteService {
         final inputTensor = [trimmed.map((e) => e.toDouble()).toList()];
         final output = List.filled(1 * 2, 0.0).reshape([1, 2]);
         _interpreter!.run(inputTensor, output);
-        final logits = (output[0] as List<double>);
-        final maxL = logits.reduce(math.max);
-        final exps = logits.map((v) => math.exp(v - maxL)).toList();
+        final outList = (output[0] as List).map((e) => (e as num).toDouble()).toList();
+        final sumOut = outList[0] + outList[1];
+        if ((sumOut - 1.0).abs() < 0.05 && outList[0] >= 0 && outList[1] >= 0) {
+          return outList[1].clamp(0.0, 1.0);
+        }
+        final maxL = outList.reduce(math.max);
+        final exps = outList.map((v) => math.exp(v - maxL)).toList();
         final sum = exps.reduce((a, b) => a + b);
         final probs = exps.map((e) => e / sum).toList();
         return probs[1].clamp(0.0, 1.0);

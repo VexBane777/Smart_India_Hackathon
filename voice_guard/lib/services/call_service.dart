@@ -82,6 +82,16 @@ class CallService {
     }
   }
 
+  Future<String?> getLastRecordingPath() async {
+    try {
+      final path = await _method.invokeMethod<String>('getLastRecordingPath');
+      return path;
+    } catch (e) {
+      debugPrint('getLastRecordingPath failed: $e');
+      return null;
+    }
+  }
+
   Future<bool> hasOverlayPermission() async {
     try {
       final v = await _method.invokeMethod<bool>('hasOverlayPermission');
