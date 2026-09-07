@@ -1,8 +1,14 @@
 # voice_guard model training
 
-Produces `../assets/models/voice_detector.tflite`, the real classifier
-`voice_guard`'s README lists as still-missing ("Model is heuristic until
-`assets/models/voice_detector.tflite` ... is dropped in").
+Produces `../assets/models/voice_detector.tflite`.
+
+**2026-09-07 update:** a teammate (`DeveloperAJ2799`, commit `98738b2`)
+landed a first real `.tflite` there concurrently with this pipeline being
+written (10 KB — genuinely "lightweight," almost certainly not trained on
+ASVspoof-scale data yet). This pipeline is still the way to replace it
+with one trained on a real corpus once the GPU-session training run
+finishes — check `../assets/models/voice_detector.tflite`'s size/date
+before assuming it still needs building from scratch.
 
 **Feature contract (must not drift):** `features.py` is a numpy port of
 `lib/utils/audio_processor.dart`'s `extractLfcc`/`extractProsody` — 60 LFCC
