@@ -258,10 +258,9 @@ class _CallScreenState extends State<CallScreen> {
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.black12)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
               const Text('Live Microphone Audio Stream', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-              const Spacer(),
-              Text('16 kHz • 60 LFCC • LiteRT Model', style: TextStyle(fontSize: 10, color: Colors.black.withValues(alpha: 0.5))),
+              Text('16 kHz • TFLite', style: TextStyle(fontSize: 10, color: Colors.black.withValues(alpha: 0.5))),
             ]),
             const SizedBox(height: 10),
             WaveformVisualizer(samples: _liveWaveform, color: color),
