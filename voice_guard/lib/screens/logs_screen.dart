@@ -30,8 +30,10 @@ class LogsScreen extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text('Risk events from live calls will appear here.\nOnly metadata is stored — no raw audio.',
                     textAlign: TextAlign.center, style: TextStyle(fontSize: 11, color: Colors.black.withValues(alpha: 0.5), height: 1.4)),
-                const SizedBox(height: 14),
-                OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Back to Home')),
+                if (Navigator.canPop(context)) ...[
+                  const SizedBox(height: 14),
+                  OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Back to Home')),
+                ],
               ]))
           : ListView.separated(
               padding: const EdgeInsets.all(12),
