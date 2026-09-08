@@ -20,12 +20,14 @@ import json
 from pathlib import Path
 
 import numpy as np
-import torch
-from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
 
 from dataset import build_examples, split_by_source, to_arrays
-from model import VoiceGuardMLP
+
+# torch/model are imported lazily inside main() — dataset.build_examples()
+# spawns a multiprocessing.ProcessPoolExecutor, and on Windows (spawn-only,
+# no fork) each worker re-execs this script's module-level code. Importing
+# torch (with its CUDA DLLs) up here means every worker pays that cost too,
+# which is what blew a 16GB-RAM box's page file when running many workers.
 
 
 def compute_eer(scores: np.ndarray, labels: np.ndarray) -> float:
@@ -48,9 +50,20 @@ def compute_eer(scores: np.ndarray, labels: np.ndarray) -> float:
 
 
 def main() -> None:
+    import torch
+    from torch import nn
+    from torch.utils.data import DataLoader, TensorDataset
+
+    from model import VoiceGuardMLP
+
     ap = argparse.ArgumentParser()
-    ap.add_argument("--real", type=Path, required=True)
-    ap.add_argument("--fake", type=Path, required=True)
+    ap.add_argument("--real", type=Path, required=True, nargs="+", help="one or more real/ WAV dirs (degraded through --channel)")
+    ap.add_argument("--fake", type=Path, required=True, nargs="+", help="one or more fake/ WAV dirs (degraded through --channel)")
+    ap.add_argument("--real-clean", type=Path, default=[], nargs="*",
+                     help="additional real/ WAV dirs used as-is, no --channel degradation applied "
+                     "(e.g. already telephony-degraded corpora like ASVspoof2021 LA eval)")
+    ap.add_argument("--fake-clean", type=Path, default=[], nargs="*",
+                     help="additional fake/ WAV dirs used as-is, no --channel degradation applied")
     ap.add_argument("--out", type=Path, default=Path("runs/voice_guard_mlp"))
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--lr", type=float, default=1e-3)
@@ -62,11 +75,31 @@ def main() -> None:
         help="TeleChannel recipe names to degrade training audio through "
         "(e.g. whatsapp volte cellular_3g); pass 'clean' or omit for none.",
     )
+    ap.add_argument(
+        "--device",
+        default="auto",
+        choices=["auto", "cpu", "cuda"],
+        help="device for the MLP training loop itself; feature extraction/"
+        "channel degradation always run on CPU (ffmpeg subprocess work, "
+        "not matrix math, so a GPU wouldn't help there).",
+    )
+    ap.add_argument("--workers", type=int, default=None, help="process-pool size for feature extraction")
     args = ap.parse_args()
+
+    device = args.device
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Training device: {device}")
 
     recipes = [None if r in (None, "clean") else r for r in args.channel]
     print(f"Building examples (channels={recipes})...")
-    examples = build_examples(args.real, args.fake, channel_recipes=recipes)
+    examples = build_examples(args.real, args.fake, channel_recipes=recipes, workers=args.workers)
+    if args.real_clean or args.fake_clean:
+        print(f"Building clean (no-degradation) examples from "
+              f"{len(args.real_clean)} real-clean + {len(args.fake_clean)} fake-clean dirs...")
+        examples += build_examples(
+            args.real_clean or [], args.fake_clean or [], channel_recipes=[None], workers=args.workers
+        )
     train_ex, val_ex = split_by_source(examples)
     print(f"{len(train_ex)} train windows / {len(val_ex)} val windows "
           f"from {len({e.source_file for e in examples})} source files")
@@ -82,14 +115,16 @@ def main() -> None:
         shuffle=True,
     )
 
-    model = VoiceGuardMLP(norm_mean=mean, norm_std=std)
+    model = VoiceGuardMLP(norm_mean=mean, norm_std=std).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     loss_fn = nn.CrossEntropyLoss()
+    X_val_t = torch.from_numpy(X_val).to(device)
 
     for epoch in range(args.epochs):
         model.train()
         total_loss = 0.0
         for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
             opt.zero_grad()
             loss = loss_fn(model(xb), yb)
             loss.backward()
@@ -99,11 +134,12 @@ def main() -> None:
 
         model.eval()
         with torch.no_grad():
-            val_logits = model(torch.from_numpy(X_val))
-            val_probs = torch.softmax(val_logits, dim=-1)[:, 1].numpy()
+            val_logits = model(X_val_t)
+            val_probs = torch.softmax(val_logits, dim=-1)[:, 1].cpu().numpy()
         eer = compute_eer(val_probs, y_val)
         print(f"epoch {epoch + 1}/{args.epochs}  train_loss={total_loss:.4f}  val_eer={eer:.4f}")
 
+    model = model.cpu()
     args.out.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), args.out / "model.pt")
 

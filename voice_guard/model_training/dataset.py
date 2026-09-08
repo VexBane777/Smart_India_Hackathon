@@ -16,8 +16,10 @@ that makes TeleChannel the project's differentiator, not just an aside.
 """
 from __future__ import annotations
 
+import os
 import random
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,7 +30,10 @@ from features import SAMPLE_RATE, chunk_audio, extract_features
 
 VAANI_ROOT = Path(__file__).resolve().parents[2] / "vaani"
 if str(VAANI_ROOT) not in sys.path:
-    sys.path.insert(0, str(VAANI_ROOT))
+    # append, not insert(0): vaani/ has its own train.py, and inserting at
+    # the front shadowed this package's train.py for anything importing
+    # both (e.g. eval_held_out.py's `from train import compute_eer`).
+    sys.path.append(str(VAANI_ROOT))
 
 
 @dataclass
@@ -57,25 +62,62 @@ def _maybe_channel(pcm: np.ndarray, recipe: str | None) -> np.ndarray:
     return process_clip(pcm, recipe, SAMPLE_RATE)
 
 
-def build_examples(
-    real_dir: Path,
-    fake_dir: Path,
-    channel_recipes: list[str | None] = (None,),
+def _process_file(
+    args: tuple[Path, int, list[str | None]],
 ) -> list[Example]:
+    wav_path, label, channel_recipes = args
+    pcm = _load_mono_16k(wav_path)
+    out: list[Example] = []
+    for recipe in channel_recipes:
+        degraded = _maybe_channel(pcm, recipe)
+        for chunk in chunk_audio(degraded):
+            out.append(
+                Example(
+                    features=extract_features(chunk),
+                    label=label,
+                    source_file=wav_path.name,
+                )
+            )
+    return out
+
+
+def _as_dir_list(dirs: Path | list[Path]) -> list[Path]:
+    return [dirs] if isinstance(dirs, (str, Path)) else list(dirs)
+
+
+def build_examples(
+    real_dir: Path | list[Path],
+    fake_dir: Path | list[Path],
+    channel_recipes: list[str | None] = (None,),
+    workers: int | None = None,
+) -> list[Example]:
+    """Extracts (features, label) examples from one or more real/fake WAV
+    dirs, optionally degraded through each channel recipe.
+
+    Parallelized across files with a process pool: each file's channel
+    degradation (ffmpeg subprocess roundtrips) and feature extraction are
+    CPU-bound and independent, so this is a straightforward multi-core win
+    on a large corpus."""
+    tasks: list[tuple[Path, int, list[str | None]]] = []
+    for label, dirs in ((0, real_dir), (1, fake_dir)):
+        for directory in _as_dir_list(dirs):
+            for wav_path in sorted(Path(directory).glob("*.wav")):
+                tasks.append((wav_path, label, list(channel_recipes)))
+
+    workers = workers or os.cpu_count() or 1
     examples: list[Example] = []
-    for label, directory in ((0, real_dir), (1, fake_dir)):
-        for wav_path in sorted(Path(directory).glob("*.wav")):
-            pcm = _load_mono_16k(wav_path)
-            for recipe in channel_recipes:
-                degraded = _maybe_channel(pcm, recipe)
-                for chunk in chunk_audio(degraded):
-                    examples.append(
-                        Example(
-                            features=extract_features(chunk),
-                            label=label,
-                            source_file=wav_path.name,
-                        )
-                    )
+    if workers <= 1 or len(tasks) < 2:
+        for task in tasks:
+            examples.extend(_process_file(task))
+        return examples
+
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        done = 0
+        for result in pool.map(_process_file, tasks, chunksize=4):
+            examples.extend(result)
+            done += 1
+            if done % 500 == 0:
+                print(f"  ...{done}/{len(tasks)} source files processed", file=sys.stderr)
     return examples
 
 
