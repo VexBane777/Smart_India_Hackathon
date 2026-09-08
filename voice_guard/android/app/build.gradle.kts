@@ -47,4 +47,13 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+
+    // flutter_webrtc declares this as `implementation` (not `api`), so its
+    // org.webrtc.* classes aren't exposed on :app's compile classpath even
+    // though the jar is already merged into the runtime/final APK via that
+    // dependency. compileOnly avoids pulling in a second copy at package
+    // time — RemoteAudioTap.kt only needs these types to compile.
+    // Must match flutter_webrtc's own pinned version (see its
+    // android/build.gradle) to guarantee binary compatibility at runtime.
+    compileOnly("io.github.webrtc-sdk:android:125.6422.03")
 }

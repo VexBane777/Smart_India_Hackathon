@@ -14,6 +14,9 @@ class MainActivity : FlutterActivity() {
     private val methodChannel = "com.voiceguard/calls"
     private val eventChannel = "com.voiceguard/audio_stream"
     private var eventSink: EventChannel.EventSink? = null
+    private val webrtcAudioTapChannel = "com.voiceguard/webrtc_audio_tap"
+    private val webrtcAudioTapEventChannel = "com.voiceguard/webrtc_audio_tap_stream"
+    private var webrtcAudioTapSink: EventChannel.EventSink? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -132,6 +135,45 @@ class MainActivity : FlutterActivity() {
                 override fun onCancel(args: Any?) {
                     eventSink = null
                     AudioCaptureManager.setSink(null)
+                }
+            }
+        )
+
+        // Taps raw PCM off the remote party's WebRTC audio track for the
+        // Protected Call scoring pipeline — see RemoteAudioTap for why this
+        // exists (flutter_webrtc has no Dart-level RTCAudioSink equivalent).
+        val webrtcPlugin = flutterEngine.plugins.get(
+            com.cloudwebrtc.webrtc.FlutterWebRTCPlugin::class.java
+        ) as? com.cloudwebrtc.webrtc.FlutterWebRTCPlugin
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, webrtcAudioTapChannel).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "attach" -> {
+                    val trackId = call.argument<String>("trackId")
+                    if (trackId == null || webrtcPlugin == null) {
+                        result.success(false)
+                    } else {
+                        val attached = RemoteAudioTap.attach(webrtcPlugin, trackId) { bytes ->
+                            runOnUiThread { webrtcAudioTapSink?.success(bytes) }
+                        }
+                        result.success(attached)
+                    }
+                }
+                "detach" -> {
+                    RemoteAudioTap.detach()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, webrtcAudioTapEventChannel).setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(args: Any?, sink: EventChannel.EventSink) {
+                    webrtcAudioTapSink = sink
+                }
+                override fun onCancel(args: Any?) {
+                    webrtcAudioTapSink = null
                 }
             }
         )

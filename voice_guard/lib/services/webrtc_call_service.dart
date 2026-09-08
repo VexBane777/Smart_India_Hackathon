@@ -1,7 +1,19 @@
 import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'audio_service.dart';
 import 'signaling_service.dart';
+
+/// Native bridge for tapping raw PCM off the remote WebRTC audio track.
+/// flutter_webrtc has no Dart-level `RTCAudioSink`-equivalent API (verified
+/// absent across its entire published history — see
+/// android/app/src/main/kotlin/com/voiceguard/voice_guard/RemoteAudioTap.kt
+/// for the native mechanism this actually uses:
+/// org.webrtc.AudioTrack.addSink(), which flutter_webrtc's own Dart/Java
+/// layer never wraps but which is real and public on the native track
+/// object underneath).
+const _audioTapChannel = MethodChannel('com.voiceguard/webrtc_audio_tap');
+const _audioTapEventChannel = EventChannel('com.voiceguard/webrtc_audio_tap_stream');
 
 /// Owns the WebRTC peer connection for VoiceGuard's "Protected Call" mode.
 /// See docs/superpowers/plans/2026-09-08-voice-guard-self-owned-voip-call.md:
@@ -15,6 +27,7 @@ class WebRtcCallService {
   final SignalingService signaling;
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
+  StreamSubscription? _remoteAudioSub;
   final _connectionStateCtrl = StreamController<RTCPeerConnectionState>.broadcast();
 
   WebRtcCallService({required this.audioService, required this.signaling}) {
@@ -47,11 +60,7 @@ class WebRtcCallService {
     };
     _pc!.onTrack = (event) {
       if (event.track.kind == 'audio') {
-        // flutter_webrtc surfaces remote audio via the platform's own audio
-        // output (it plays automatically) rather than raw PCM callbacks.
-        // Scoring the remote party's voice from a WebRTC track requires an
-        // audio sink/interceptor — see Task 4, which wires this up once the
-        // track exists here.
+        _attachRemoteAudioTap(event.track.id!);
       }
     };
 
@@ -68,6 +77,18 @@ class WebRtcCallService {
       await _pc!.setLocalDescription(offer);
       signaling.send({'type': 'offer', 'sdp': offer.sdp});
     }
+  }
+
+  /// Asks the native side (RemoteAudioTap.kt) to attach a raw-PCM sink to
+  /// the remote track with this id, then routes whatever it emits into the
+  /// same scoring pipeline every other capture path in this app already
+  /// uses.
+  Future<void> _attachRemoteAudioTap(String trackId) async {
+    final attached = await _audioTapChannel.invokeMethod<bool>('attach', {'trackId': trackId}) ?? false;
+    if (!attached) return;
+    _remoteAudioSub = _audioTapEventChannel.receiveBroadcastStream().listen((data) {
+      audioService.ingestBytes(Uint8List.fromList(data as List<int>));
+    });
   }
 
   Future<void> _onSignalingMessage(Map<String, dynamic> msg) async {
@@ -94,6 +115,9 @@ class WebRtcCallService {
   }
 
   Future<void> endCall() async {
+    await _remoteAudioSub?.cancel();
+    _remoteAudioSub = null;
+    await _audioTapChannel.invokeMethod('detach');
     await _localStream?.dispose();
     await _pc?.close();
     _pc = null;
