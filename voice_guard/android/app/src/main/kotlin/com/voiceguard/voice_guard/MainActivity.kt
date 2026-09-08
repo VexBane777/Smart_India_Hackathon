@@ -53,6 +53,12 @@ class MainActivity : FlutterActivity() {
                 "getLastRecordingPath" -> {
                     result.success(AudioCaptureManager.lastRecordingPath)
                 }
+                "getCaptureStatus" -> {
+                    result.success(mapOf(
+                        "source" to AudioCaptureManager.activeSourceName,
+                        "hasSignal" to AudioCaptureManager.hasRecentSignal
+                    ))
+                }
                 "placeCall" -> {
                     val number = call.argument<String>("number") ?: ""
                     try {
@@ -78,9 +84,29 @@ class MainActivity : FlutterActivity() {
                 }
                 "toggleSpeakerphone" -> {
                     val enable = call.argument<Boolean>("enable") ?: true
-                    val am = getSystemService(android.media.AudioManager::class.java)
-                    am.isSpeakerphoneOn = enable
-                    result.success(am.isSpeakerphoneOn)
+                    if (InCallServiceImpl.hasActiveCall()) {
+                        // Real telecom call: must route via InCallService.setAudioRoute —
+                        // AudioManager.isSpeakerphoneOn gets silently overridden by
+                        // Telecom's own CallAudioRouteStateMachine otherwise.
+                        InCallServiceImpl.setSpeakerphone(enable)
+                        result.success(enable)
+                    } else {
+                        // No real call (e.g. the Live Mic self-test) — plain AudioManager works.
+                        val am = getSystemService(android.media.AudioManager::class.java)
+                        am.isSpeakerphoneOn = enable
+                        result.success(am.isSpeakerphoneOn)
+                    }
+                }
+                "toggleMicMute" -> {
+                    val muted = call.argument<Boolean>("muted") ?: true
+                    if (InCallServiceImpl.hasActiveCall()) {
+                        InCallServiceImpl.setMuted(muted)
+                        result.success(muted)
+                    } else {
+                        val am = getSystemService(android.media.AudioManager::class.java)
+                        am.isMicrophoneMute = muted
+                        result.success(am.isMicrophoneMute)
+                    }
                 }
                 "showOverlay" -> {
                     val score = (call.argument<Double>("riskScore") ?: 0.0)

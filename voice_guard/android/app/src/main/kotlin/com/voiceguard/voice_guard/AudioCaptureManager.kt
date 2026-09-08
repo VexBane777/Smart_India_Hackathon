@@ -13,7 +13,22 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * AudioCaptureManager — Captures 16kHz 16-bit mono PCM from VOICE_COMMUNICATION / MIC.
+ * AudioCaptureManager — Captures 16kHz 16-bit mono PCM for on-device scoring + WAV recording.
+ *
+ * Source cascade (see module docstring in call_service.dart for the platform rationale):
+ * a regular app cannot read live cellular call audio once the telephony HAL owns the mic
+ * for an active call — VOICE_COMMUNICATION's hardware AEC actively cancels the acoustic
+ * speaker-to-mic loop the app depends on for hearing the far end, and on most stock builds
+ * AudioRecord reads silently zero-fill instead of erroring once the real call audio path
+ * takes over. So capture is attempted in this order and the first source that actually
+ * initializes is used:
+ *   1. VOICE_CALL     — only a handful of OEM builds honor this for non-privileged apps,
+ *                       but costs nothing to try first since it needs no acoustic coupling.
+ *   2. VOICE_RECOGNITION — AGC/noise-suppression are specified OFF for this source, which
+ *                       matters for feeding a classifier: MIC's default DSP chain would
+ *                       otherwise flatten exactly the spectral/prosodic cues LFCC extraction
+ *                       depends on. Relies on speakerphone being on for the far end to reach it.
+ *   3. MIC            — universal fallback if VOICE_RECOGNITION tuning isn't available.
  * Real Call Recording: Writes PCM chunks to a standard 44-byte WAV file in the app's
  * external files directory so calls are permanently recorded and playable.
  * Real-Time Stream: Pushes PCM chunks to Flutter via EventChannel for on-device TFLite inference.
@@ -24,6 +39,13 @@ object AudioCaptureManager {
     private const val CHANNEL = AudioFormat.CHANNEL_IN_MONO
     private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
 
+    // Ordered by preference; see cascade rationale above.
+    private val SOURCE_CASCADE = listOf(
+        "VOICE_CALL" to MediaRecorder.AudioSource.VOICE_CALL,
+        "VOICE_RECOGNITION" to MediaRecorder.AudioSource.VOICE_RECOGNITION,
+        "MIC" to MediaRecorder.AudioSource.MIC,
+    )
+
     private var recorder: AudioRecord? = null
     private var thread: Thread? = null
     @Volatile private var running = false
@@ -31,12 +53,42 @@ object AudioCaptureManager {
 
     var lastRecordingPath: String? = null
         private set
+    var activeSourceName: String? = null
+        private set
+
+    // Rolling capture-quality signal: true once any recent chunk had real signal.
+    // Lets the UI distinguish "genuinely quiet call" from "OS silently zero-filled
+    // our reads" instead of presenting both as the same flat low-risk score.
+    @Volatile var hasRecentSignal: Boolean = false
+        private set
+    private var silentReadStreak = 0
+    private const val SILENCE_RMS_THRESHOLD = 50.0
+    private const val SILENT_STREAK_TO_FLAG = 20 // ~2s at 100ms/read
 
     private var currentRecordingFile: File? = null
     private var recordingStream: FileOutputStream? = null
     private var totalBytesRecorded = 0L
 
     fun setSink(s: ((ByteArray) -> Unit)?) { sink = s }
+
+    private fun openRecorder(bufSize: Int): Boolean {
+        for ((name, source) in SOURCE_CASCADE) {
+            val candidate = try {
+                AudioRecord(source, SAMPLE_RATE, CHANNEL, ENCODING, bufSize)
+            } catch (e: Exception) {
+                Log.w(TAG, "Source $name threw on construction: ${e.message}")
+                null
+            }
+            if (candidate?.state == AudioRecord.STATE_INITIALIZED) {
+                Log.i(TAG, "Using audio source: $name")
+                recorder = candidate
+                activeSourceName = name
+                return true
+            }
+            candidate?.release()
+        }
+        return false
+    }
 
     fun start(context: Context, onBytes: ((ByteArray) -> Unit)? = null) {
         if (onBytes != null) {
@@ -46,24 +98,10 @@ object AudioCaptureManager {
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
         if (minBuf <= 0) { Log.e(TAG, "Invalid min buffer size: $minBuf"); return }
         val bufSize = minBuf * 4
-        try {
-            // VOICE_COMMUNICATION activates hardware AEC & beamforming for calls; fallback to MIC
-            recorder = try {
-                AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                    SAMPLE_RATE, CHANNEL, ENCODING, bufSize
-                )
-            } catch (_: Exception) {
-                AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE, CHANNEL, ENCODING, bufSize
-                )
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "AudioRecord creation failed", e); return
-        }
-        if (recorder?.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "AudioRecord not initialized"); return
+        hasRecentSignal = false
+        silentReadStreak = 0
+        if (!openRecorder(bufSize)) {
+            Log.e(TAG, "No audio source could be initialized"); return
         }
 
         // Initialize Call Recording WAV File
@@ -89,6 +127,25 @@ object AudioCaptureManager {
                 val n = recorder?.read(buf, 0, buf.size) ?: 0
                 if (n > 0) {
                     val copy = buf.copyOf(n)
+                    // Track whether the OS is actually handing us signal or silently
+                    // zero-filling reads (see class docstring) so the UI can tell
+                    // "quiet call" apart from "capture source lost the call audio".
+                    var sumSq = 0.0
+                    var i = 0
+                    while (i + 1 < n) {
+                        val sample = ((copy[i + 1].toInt() shl 8) or (copy[i].toInt() and 0xFF)).toShort().toDouble()
+                        sumSq += sample * sample
+                        i += 2
+                    }
+                    val sampleCount = n / 2
+                    val rms = if (sampleCount > 0) Math.sqrt(sumSq / sampleCount) else 0.0
+                    if (rms < SILENCE_RMS_THRESHOLD) {
+                        silentReadStreak++
+                        if (silentReadStreak >= SILENT_STREAK_TO_FLAG) hasRecentSignal = false
+                    } else {
+                        silentReadStreak = 0
+                        hasRecentSignal = true
+                    }
                     // 1. Write audio chunk to WAV file on disk
                     try {
                         recordingStream?.write(buf, 0, n)
@@ -111,6 +168,8 @@ object AudioCaptureManager {
         try { recorder?.stop() } catch (_: Exception) {}
         try { recorder?.release() } catch (_: Exception) {}
         recorder = null
+        activeSourceName = null
+        hasRecentSignal = false
 
         // Finalize WAV Header on disk
         try {

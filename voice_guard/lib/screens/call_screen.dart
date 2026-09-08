@@ -23,12 +23,15 @@ class CallScreen extends StatefulWidget {
 class _CallScreenState extends State<CallScreen> {
   String _dialNumber = '';
   bool _speakerphoneOn = false;
+  bool _micMuted = false;
   bool _liveMicActive = false;
   bool _isDefaultDialer = false;
   DateTime? _callStartTime;
   List<double> _liveWaveform = const [];
   StreamSubscription<double>? _scoreSub;
   StreamSubscription<List<double>>? _pcmSub;
+  Timer? _captureStatusTimer;
+  CaptureStatus? _captureStatus;
 
   @override
   void initState() {
@@ -94,7 +97,23 @@ class _CallScreenState extends State<CallScreen> {
   void dispose() {
     _scoreSub?.cancel();
     _pcmSub?.cancel();
+    _captureStatusTimer?.cancel();
     super.dispose();
+  }
+
+  void _startCaptureStatusPolling() {
+    _captureStatusTimer?.cancel();
+    final calls = context.read<CallService>();
+    _captureStatusTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      final status = await calls.getCaptureStatus();
+      if (mounted) setState(() => _captureStatus = status);
+    });
+  }
+
+  void _stopCaptureStatusPolling() {
+    _captureStatusTimer?.cancel();
+    _captureStatusTimer = null;
+    if (mounted) setState(() => _captureStatus = null);
   }
 
   void _onDigitPress(String digit) {
@@ -123,6 +142,7 @@ class _CallScreenState extends State<CallScreen> {
     callState.setStatus(CallStatus.dialing, number: _dialNumber);
 
     await calls.startCallDetection();
+    _startCaptureStatusPolling();
     final placed = await calls.placeCall(_dialNumber);
     if (!placed) {
       if (mounted) {
@@ -151,6 +171,7 @@ class _CallScreenState extends State<CallScreen> {
       audio.startScoring();
       callState.setStatus(CallStatus.active, number: 'Live Acoustic Scanner');
       await calls.startCallDetection();
+      _startCaptureStatusPolling();
     }
   }
 
@@ -165,9 +186,11 @@ class _CallScreenState extends State<CallScreen> {
         : Duration.zero;
     _callStartTime = null;
 
+    _stopCaptureStatusPolling();
     setState(() {
       _liveMicActive = false;
       _speakerphoneOn = false;
+      _micMuted = false;
     });
     audio.stopScoring();
     await calls.endCall();
@@ -178,7 +201,7 @@ class _CallScreenState extends State<CallScreen> {
     await Future.delayed(const Duration(milliseconds: 300));
     final recPath = await calls.getLastRecordingPath();
     final curRisk = risk.current;
-    final score = curRisk?.score ?? 0.05;
+    final score = curRisk?.score ?? 0.0;
     final verdict = curRisk?.verdict ??
         (score >= 0.70
             ? Verdict.detected
@@ -208,11 +231,18 @@ class _CallScreenState extends State<CallScreen> {
     setState(() => _speakerphoneOn = res);
   }
 
+  Future<void> _toggleMicMute() async {
+    final calls = context.read<CallService>();
+    final next = !_micMuted;
+    final res = await calls.toggleMicMute(next);
+    setState(() => _micMuted = res);
+  }
+
   @override
   Widget build(BuildContext context) {
     final call = context.watch<CallStateProvider>();
     final risk = context.watch<RiskScoreProvider>().current;
-    final score = risk?.score ?? 0.05;
+    final score = risk?.score ?? 0.0;
     final isCallInProgress = call.state.isActive || call.state.isDialing || call.state.isIncoming || _liveMicActive;
     final verdict = risk?.label ?? AppConstants.verdictFor(score);
     final color = risk?.color ?? AppConstants.colorFor(score);
@@ -284,6 +314,29 @@ class _CallScreenState extends State<CallScreen> {
           ]),
         ),
         const SizedBox(height: 14),
+
+        if (_captureStatus != null && !_captureStatus!.hasSignal) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.mic_off_outlined, color: Colors.orange, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'No live audio reaching the mic (source: ${_captureStatus!.source ?? 'unknown'}). '
+                  'Turn on speakerphone so the other side\'s voice can be heard by the mic.',
+                  style: const TextStyle(fontSize: 11, color: Colors.black87, height: 1.3),
+                ),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 14),
+        ],
 
         // Live Risk Meter (TFLite Inference)
         RiskMeter(score: score),
@@ -375,11 +428,11 @@ class _CallScreenState extends State<CallScreen> {
             onTap: _endCall,
           ),
           _circleAction(
-            icon: _liveMicActive ? Icons.mic : Icons.mic_off,
-            label: _liveMicActive ? 'Mic Active' : 'Mic Mute',
-            color: _liveMicActive ? AppColors.primary : Colors.black54,
-            bg: _liveMicActive ? AppColors.primary.withValues(alpha: 0.12) : const Color(0xFFF0F0F0),
-            onTap: _toggleLiveMic,
+            icon: _micMuted ? Icons.mic_off : Icons.mic,
+            label: _micMuted ? 'Muted' : 'Mic On',
+            color: _micMuted ? Colors.black54 : AppColors.primary,
+            bg: _micMuted ? const Color(0xFFF0F0F0) : AppColors.primary.withValues(alpha: 0.12),
+            onTap: _toggleMicMute,
           ),
         ]),
         const SizedBox(height: 20),
