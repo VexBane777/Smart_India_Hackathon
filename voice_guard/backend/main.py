@@ -27,12 +27,15 @@ _VAANI_DIR = Path(__file__).resolve().parents[2] / "vaani"
 if str(_VAANI_DIR) not in sys.path:
     sys.path.insert(0, str(_VAANI_DIR))
 from app.engine_mock import AlertStateMachine  # noqa: E402
+from signaling import signaling_router
 
 app = FastAPI(
     title="VoiceGuard Integration API",
     version="0.1.0",
     description="Embeddable voice-cloning risk scoring for banking apps, contact centers, and telecom platforms. Accepts LFCC/prosody features (not raw audio).",
 )
+
+app.include_router(signaling_router)
 
 API_KEY = "vg_demo_key"
 
