@@ -39,6 +39,18 @@ and `data/prep_in_the_wild.py`.
 - Previous entries below (the 5k-fake-subsample, no-channel-degradation
   `voice_guard_v1` run, and the placeholder `.tflite` before that) are kept
   for history but are superseded by the above.
+- **Merged with a concurrent session's changes after this run finished**
+  (RNG-seeded channel degradation via `--seed`, `process_clip(..., rng=)`).
+  That merge also picked up a semantic fix: `"clean"` is a real, registered
+  TeleChannel recipe (light rir/noise/mic/loss, no codec/bandlimit — see
+  `telechannel/configs/channels.yaml`), not a synonym for "no processing."
+  The `voice_guard_v3` run above used the *old* code, where `--channel
+  whatsapp volte clean` silently treated `clean` as zero processing for
+  that third of the corpus. Going forward `--channel whatsapp volte clean`
+  means what it says — pass no `--channel` flag at all (or an empty list)
+  for truly undegraded audio. `voice_guard_v3`'s reported numbers stand as
+  measured, but a fresh run under the merged code would build a slightly
+  different training mix and shouldn't be assumed to reproduce them exactly.
 
 **Feature contract (must not drift):** `features.py` is a numpy port of
 `lib/utils/audio_processor.dart`'s `extractLfcc`/`extractProsody` — 60 LFCC
