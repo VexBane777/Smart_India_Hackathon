@@ -1,7 +1,9 @@
 package com.voiceguard.voice_guard
 
+import android.app.Activity
 import android.app.role.RoleManager
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -17,6 +19,9 @@ class MainActivity : FlutterActivity() {
     private val webrtcAudioTapChannel = "com.voiceguard/webrtc_audio_tap"
     private val webrtcAudioTapEventChannel = "com.voiceguard/webrtc_audio_tap_stream"
     private var webrtcAudioTapSink: EventChannel.EventSink? = null
+    private var pendingProjectionResult: MethodChannel.Result? = null
+    private var pendingMediaProjection: android.media.projection.MediaProjection? = null
+    private val PLAYBACK_CAPTURE_REQUEST_CODE = 2001
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -121,6 +126,32 @@ class MainActivity : FlutterActivity() {
                     OverlayService.hide(this)
                     result.success(null)
                 }
+                "requestPlaybackCaptureConsent" -> {
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                        result.error("UNSUPPORTED", "Requires Android 10+", null)
+                    } else {
+                        val mpm = getSystemService(MediaProjectionManager::class.java)
+                        pendingProjectionResult = result
+                        startActivityForResult(mpm.createScreenCaptureIntent(), PLAYBACK_CAPTURE_REQUEST_CODE)
+                    }
+                }
+                "startPlaybackCapture" -> {
+                    val projection = pendingMediaProjection
+                    if (projection == null) {
+                        result.success(false)
+                    } else {
+                        val started = PlaybackCaptureManager.start(this, projection) { bytes ->
+                            eventSink?.success(bytes)
+                        }
+                        result.success(started)
+                    }
+                }
+                "stopPlaybackCapture" -> {
+                    PlaybackCaptureManager.stop()
+                    pendingMediaProjection?.stop()
+                    pendingMediaProjection = null
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -179,6 +210,20 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != PLAYBACK_CAPTURE_REQUEST_CODE) return
+        val granted = resultCode == Activity.RESULT_OK && data != null
+        if (granted) {
+            val mpm = getSystemService(MediaProjectionManager::class.java)
+            pendingMediaProjection = mpm.getMediaProjection(resultCode, data!!)
+            startForegroundService(Intent(this, PlaybackCaptureForegroundService::class.java))
+        }
+        pendingProjectionResult?.success(granted)
+        pendingProjectionResult = null
+        channel?.invokeMethod("onPlaybackCaptureConsent", mapOf("granted" to granted))
+    }
+
     private fun isDefaultDialer(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val rm = getSystemService(RoleManager::class.java)
@@ -213,6 +258,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        PlaybackCaptureManager.stop()
+        pendingMediaProjection?.stop()
         super.onDestroy()
         if (instance == this) {
             instance = null

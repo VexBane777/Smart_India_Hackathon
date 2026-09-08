@@ -9,6 +9,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.USE_SIP" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <application
         android:label="Vaani"
@@ -73,6 +74,11 @@
 
         <!-- Overlay warning service -->
         <service android:name=".OverlayService" android:exported="false" />
+
+        <service
+            android:name=".PlaybackCaptureForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
         <meta-data
             android:name="flutterEmbedding"
