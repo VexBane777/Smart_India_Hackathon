@@ -58,6 +58,18 @@ previously blocked — no ffmpeg on PATH, and the docstrings said so. Resolved:
 - Committed as `4459f31` (rename + fix + stale-caveat cleanup) and `915e198`
   (old-path removal) on `vaani`, 2026-09-04.
 
+## `voice_guard/` — VoiceGuard (real-time AI voice-clone detector, Flutter/Android)
+
+**Read `voice_guard/state.md` at the start of any session touching this
+directory, before doing anything else — and update it before ending a
+session that changed status, findings, or plans.** It's the maintained
+record of what's proven working, what's blocked and why (with evidence,
+not just conclusions), and ideas not yet tried toward the still-open goal
+of real-time audio capture during an actual phone call on a non-rooted
+device. Treat a claim in it as "true when last verified," not gospel —
+spot-check before relying on it if anything looks like it could have
+drifted (a file path, a device's behavior, a build flag).
+
 ## Open / unresolved — Module A "final scoped re-review"
 
 A user request came in to: adjudicate a "Module A final scoped re-review"
