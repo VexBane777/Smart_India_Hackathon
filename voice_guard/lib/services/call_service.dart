@@ -33,15 +33,20 @@ class CallService {
     }
   }
 
+  void Function(String status, String? number)? _callStateCb;
+
   void setCallStateCallback(void Function(String status, String? number) cb) {
-    _method.setMethodCallHandler((call) async {
-      if (call.method == 'onCallStateChanged') {
-        final args = call.arguments is Map ? call.arguments as Map : null;
-        final status = args?['status'] as String? ?? 'idle';
-        final number = args?['number'] as String?;
-        cb(status, number);
-      }
-    });
+    _callStateCb = cb;
+  }
+
+  Future<dynamic> handleMethodCall(MethodCall call) async {
+    if (call.method == 'onCallStateChanged') {
+      final args = call.arguments is Map ? call.arguments as Map : null;
+      final status = args?['status'] as String? ?? 'idle';
+      final number = args?['number'] as String?;
+      _callStateCb?.call(status, number);
+    }
+    return null;
   }
 
   Future<bool> placeCall(String number) async {
