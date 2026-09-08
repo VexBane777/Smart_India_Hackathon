@@ -8,6 +8,7 @@ import '../utils/constants.dart';
 import 'call_screen.dart';
 import 'settings_screen.dart';
 import 'logs_screen.dart';
+import 'protected_call_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -110,6 +111,10 @@ class HomeScreen extends StatelessWidget {
             Expanded(child: _actionBtn(context, icon: Icons.history, label: 'Call Logs', subtitle: 'History', onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LogsScreen())))),
             const SizedBox(width: 10),
             Expanded(child: _actionBtn(context, icon: Icons.tune, label: 'Settings', subtitle: 'Tune alerts', onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen())))),
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(child: _actionBtn(context, icon: Icons.shield_outlined, label: 'Protected Call', subtitle: 'VAANI-to-VAANI', onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProtectedCallScreen())))),
           ]),
           const SizedBox(height: 16),
           // Privacy notice
