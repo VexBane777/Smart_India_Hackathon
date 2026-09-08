@@ -30,6 +30,7 @@ class _CallScreenState extends State<CallScreen> {
   List<double> _liveWaveform = const [];
   StreamSubscription<double>? _scoreSub;
   StreamSubscription<List<double>>? _pcmSub;
+  StreamSubscription<bool>? _signalSub;
   Timer? _captureStatusTimer;
   CaptureStatus? _captureStatus;
 
@@ -75,8 +76,14 @@ class _CallScreenState extends State<CallScreen> {
 
     _scoreSub = audio.scoreStream.listen((score) async {
       if (!mounted) return;
+      final wasAlert = riskProvider.isAlert;
       riskProvider.update(score);
       final cur = riskProvider.current;
+      debugPrint('Monitor: raw=${score.toStringAsFixed(3)} ema=${cur?.score.toStringAsFixed(3)} '
+          'state=${riskProvider.state} label=${cur?.label}');
+      if (!wasAlert && riskProvider.isAlert) {
+        debugPrint('Monitor: ALERT fired — ema=${cur?.score.toStringAsFixed(3)} sensitivity=${settings.sensitivity}');
+      }
       if (cur != null && cur.score > settings.sensitivity) {
         if (settings.overlayEnabled) {
           try { await calls.showOverlay(riskScore: cur.score, verdict: cur.label); } catch (_) {}
@@ -91,12 +98,18 @@ class _CallScreenState extends State<CallScreen> {
       if (!mounted) return;
       setState(() => _liveWaveform = samples);
     });
+
+    _signalSub = audio.hasSignalStream.listen((hasSignal) {
+      if (!mounted) return;
+      riskProvider.setHasSignal(hasSignal);
+    });
   }
 
   @override
   void dispose() {
     _scoreSub?.cancel();
     _pcmSub?.cancel();
+    _signalSub?.cancel();
     _captureStatusTimer?.cancel();
     super.dispose();
   }
@@ -241,11 +254,13 @@ class _CallScreenState extends State<CallScreen> {
   @override
   Widget build(BuildContext context) {
     final call = context.watch<CallStateProvider>();
-    final risk = context.watch<RiskScoreProvider>().current;
+    final riskProvider = context.watch<RiskScoreProvider>();
+    final risk = riskProvider.current;
     final score = risk?.score ?? 0.0;
     final isCallInProgress = call.state.isActive || call.state.isDialing || call.state.isIncoming || _liveMicActive;
     final verdict = risk?.label ?? AppConstants.verdictFor(score);
     final color = risk?.color ?? AppConstants.colorFor(score);
+    final scoringHasSignal = riskProvider.hasSignal;
 
     return Scaffold(
       backgroundColor: AppColors.surface,
@@ -263,7 +278,7 @@ class _CallScreenState extends State<CallScreen> {
         ],
       ),
       body: isCallInProgress
-          ? _buildActiveCallView(call: call, score: score, verdict: verdict, color: color)
+          ? _buildActiveCallView(call: call, score: score, verdict: verdict, color: color, scoringHasSignal: scoringHasSignal)
           : _buildDialpadView(),
     );
   }
@@ -274,6 +289,7 @@ class _CallScreenState extends State<CallScreen> {
     required double score,
     required String verdict,
     required Color color,
+    required bool scoringHasSignal,
   }) {
     final audio = context.read<AudioService>();
     return ListView(
@@ -340,6 +356,22 @@ class _CallScreenState extends State<CallScreen> {
 
         // Live Risk Meter (TFLite Inference)
         RiskMeter(score: score),
+        if (!scoringHasSignal) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.blueGrey.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.volume_off_outlined, size: 16, color: Colors.blueGrey),
+              const SizedBox(width: 8),
+              Text('Quiet — score paused until voice resumes (last: ${(score * 100).round()}%)',
+                  style: const TextStyle(fontSize: 11, color: Colors.blueGrey, fontWeight: FontWeight.w600)),
+            ]),
+          ),
+        ],
         const SizedBox(height: 14),
 
         // Live Verdict Banner

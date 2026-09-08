@@ -126,7 +126,6 @@ class InCallServiceImpl : InCallService() {
         Log.i(TAG, "onCallRemoved")
         call.unregisterCallback(callback)
         handleState(call, Call.STATE_DISCONNECTED)
-        AudioCaptureManager.stop()
         if (activeCall == call) {
             activeCall = null
         }

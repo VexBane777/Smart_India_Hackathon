@@ -8,6 +8,7 @@ class RiskScoreProvider extends ChangeNotifier {
   double? _ema; // smoothed score; null until the first update() seeds it
   int _consecutiveHigh = 0;
   String _state = 'normal'; // normal | warn | alert
+  bool _hasSignal = true;
 
   // Mirrors vaani/app/engine_mock.py's AlertStateMachine (master plan §6):
   // EMA smoothing, then "alert" only after 2+ consecutive windows over
@@ -20,6 +21,13 @@ class RiskScoreProvider extends ChangeNotifier {
   double get ema => _ema ?? 0.15;
   String get state => _state;
   bool get isAlert => _state == 'alert';
+  bool get hasSignal => _hasSignal;
+
+  void setHasSignal(bool v) {
+    if (v == _hasSignal) return;
+    _hasSignal = v;
+    notifyListeners();
+  }
 
   void update(double rawScore, {List<double>? prosody, double alertThreshold = 0.6}) {
     // EMA smoothing to prevent UI flicker. Seed from the first raw score
@@ -46,6 +54,7 @@ class RiskScoreProvider extends ChangeNotifier {
     _ema = null;
     _consecutiveHigh = 0;
     _state = 'normal';
+    _hasSignal = true;
     // keep history for logs/chart
     notifyListeners();
   }

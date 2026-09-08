@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import '../utils/audio_processor.dart';
 import 'tflite_service.dart';
 
@@ -16,10 +16,24 @@ class AudioService {
   final _scoreCtrl = StreamController<double>.broadcast();
   final _pcmCtrl = StreamController<List<double>>.broadcast();
   final _rmsCtrl = StreamController<double>.broadcast();
+  final _signalCtrl = StreamController<bool>.broadcast();
 
   Stream<double> get scoreStream => _scoreCtrl.stream;
   Stream<List<double>> get pcmStream => _pcmCtrl.stream;
   Stream<double> get rmsStream => _rmsCtrl.stream;
+  /// Whether the most recently *scored* window carried real signal, as
+  /// opposed to silence/OS zero-filled reads (see AudioCaptureManager's
+  /// docstring — some OEM builds zero-fill AudioRecord reads once the real
+  /// call audio path takes over rather than erroring). Consumers should show
+  /// "no voice detected" instead of trusting a score during a false stretch,
+  /// since a window of exact/near-zero PCM deterministically collapses to
+  /// the same LFCC features every time and would otherwise look like the
+  /// model froze.
+  Stream<bool> get hasSignalStream => _signalCtrl.stream;
+
+  // Matches AudioCaptureManager's own SILENCE_RMS_THRESHOLD (50.0 on the
+  // int16 PCM domain) converted to this class's normalized [-1, 1] domain.
+  static const double _silenceRmsThreshold = 50.0 / 32768.0;
 
   void ingestBytes(Uint8List bytes) {
     final samples = AudioProcessor.pcm16ToDouble(bytes);
@@ -50,10 +64,28 @@ class AudioService {
   void startScoring({Duration interval = const Duration(seconds: 1)}) {
     _timer?.cancel();
     _timer = Timer.periodic(interval, (_) {
-      if (_buffer.length < 4800) return; // need ~0.3s minimum
-      final chunk = _buffer.length >= 48000
-          ? _buffer.sublist(_buffer.length - 48000)
-          : List<double>.from(_buffer);
+      // Require a full 3s window before scoring at all — a partial window
+      // (e.g. the first ~0.3-1s right after clearBuffer(), often containing
+      // only a dial tone/ring beep or a transient) produced spurious
+      // high-confidence verdicts in testing (an "AI DETECTED" alert fired a
+      // second into a call before any real speech had arrived).
+      if (_buffer.length < 48000) return;
+      final chunk = _buffer.sublist(_buffer.length - 48000);
+
+      double sumSq = 0;
+      for (final s in chunk) { sumSq += s * s; }
+      final chunkRms = math.sqrt(sumSq / chunk.length);
+      debugPrint('Monitor: chunkRms=${chunkRms.toStringAsFixed(6)} (int16-equiv=${(chunkRms * 32768).toStringAsFixed(1)}) '
+          'threshold=${_silenceRmsThreshold.toStringAsFixed(6)} bufLen=${_buffer.length}');
+      if (chunkRms < _silenceRmsThreshold) {
+        // Silent/zero-filled window: skip scoring rather than feed the model
+        // a degenerate all-floor input that would deterministically repeat
+        // whatever score silence happens to map to.
+        _signalCtrl.add(false);
+        return;
+      }
+      _signalCtrl.add(true);
+
       final score = tflite.scoreChunk(chunk);
       _scoreCtrl.add(score);
     });
@@ -95,6 +127,7 @@ class AudioService {
     _scoreCtrl.close();
     _pcmCtrl.close();
     _rmsCtrl.close();
+    _signalCtrl.close();
   }
 }
 

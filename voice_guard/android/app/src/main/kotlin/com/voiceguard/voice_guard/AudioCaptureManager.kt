@@ -4,6 +4,8 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -24,11 +26,35 @@ import java.util.Locale
  * initializes is used:
  *   1. VOICE_CALL     — only a handful of OEM builds honor this for non-privileged apps,
  *                       but costs nothing to try first since it needs no acoustic coupling.
- *   2. VOICE_RECOGNITION — AGC/noise-suppression are specified OFF for this source, which
+ *   2. VOICE_DOWNLINK / VOICE_UPLINK — legacy 2G/3G-era raw call-leg taps (far end / near
+ *                       end respectively). Deprecated and CAPTURE_AUDIO_OUTPUT-gated on most
+ *                       modern builds, so construction almost always fails outright rather
+ *                       than silently zero-filling — cheap to try, and on the rare OEM build
+ *                       that still honors them for a non-privileged app, they're a real tap
+ *                       into the call audio rather than relying on acoustic speaker-to-mic
+ *                       coupling at all.
+ *   3. VOICE_RECOGNITION — AGC/noise-suppression are specified OFF for this source, which
  *                       matters for feeding a classifier: MIC's default DSP chain would
  *                       otherwise flatten exactly the spectral/prosodic cues LFCC extraction
  *                       depends on. Relies on speakerphone being on for the far end to reach it.
- *   3. MIC            — universal fallback if VOICE_RECOGNITION tuning isn't available.
+ *   4. MIC            — universal fallback if VOICE_RECOGNITION tuning isn't available.
+ *
+ * Important caveat proven out in testing (2026-09-08): "initializes" is necessary but not
+ * sufficient — VOICE_CALL/VOICE_DOWNLINK/VOICE_UPLINK have been observed to report
+ * STATE_INITIALIZED while every subsequent read() is silently zero-filled for the entire
+ * call, which openRecorder() cannot detect at construction time. hasRecentSignal (silence
+ * tracking below) and the Dart-side per-window RMS gate are what actually catch this at
+ * runtime; a source higher in this cascade is not guaranteed to be better than one lower.
+ *
+ * Test-device note (2026-09-08, an "Oplus"/CPH2613-family build, Android 16 / API 36):
+ * VOICE_CALL, VOICE_DOWNLINK, and VOICE_UPLINK all failed AudioRecord construction outright
+ * (falls through to VOICE_RECOGNITION every time — check logcat for
+ * "AudioCaptureManager: Using audio source: ..." to see which one won on a given device).
+ * If you're bringing this up on a new OEM/Android version and want to know whether any of
+ * the three privileged sources are usable there: that log line is step one, and even if one
+ * of them wins, don't stop there — per the caveat above, confirm real (non-zero) RMS is
+ * actually arriving during a live call too, since "won the cascade" and "delivers real call
+ * audio" are two different, independently-failing things.
  * Real Call Recording: Writes PCM chunks to a standard 44-byte WAV file in the app's
  * external files directory so calls are permanently recorded and playable.
  * Real-Time Stream: Pushes PCM chunks to Flutter via EventChannel for on-device TFLite inference.
@@ -40,8 +66,11 @@ object AudioCaptureManager {
     private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
 
     // Ordered by preference; see cascade rationale above.
+    @Suppress("DEPRECATION")
     private val SOURCE_CASCADE = listOf(
         "VOICE_CALL" to MediaRecorder.AudioSource.VOICE_CALL,
+        "VOICE_DOWNLINK" to MediaRecorder.AudioSource.VOICE_DOWNLINK,
+        "VOICE_UPLINK" to MediaRecorder.AudioSource.VOICE_UPLINK,
         "VOICE_RECOGNITION" to MediaRecorder.AudioSource.VOICE_RECOGNITION,
         "MIC" to MediaRecorder.AudioSource.MIC,
     )
@@ -50,6 +79,10 @@ object AudioCaptureManager {
     private var thread: Thread? = null
     @Volatile private var running = false
     private var sink: ((ByteArray) -> Unit)? = null
+    // Flutter's EventChannel.EventSink must only be invoked from the platform
+    // (main) thread; the capture loop runs on a background Thread, so every
+    // sink call is hopped back to the main looper before it fires.
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     var lastRecordingPath: String? = null
         private set
@@ -154,7 +187,12 @@ object AudioCaptureManager {
                         Log.w(TAG, "Error writing audio chunk to recording", e)
                     }
                     // 2. Stream chunk to Flutter for real-time model scoring & waveform
-                    try { sink?.invoke(copy) } catch (_: Exception) {}
+                    val cb = sink
+                    if (cb != null) {
+                        mainHandler.post {
+                            try { cb.invoke(copy) } catch (_: Exception) {}
+                        }
+                    }
                 }
             }
         }.also { it.isDaemon = true; it.start() }
@@ -162,6 +200,10 @@ object AudioCaptureManager {
     }
 
     fun stop() {
+        // Telecom fires onStateChanged(DISCONNECTING), onStateChanged(DISCONNECTED)
+        // and onCallRemoved for a single hangup, each of which calls this — make
+        // repeat calls a no-op instead of re-finalizing/re-saving the same WAV.
+        if (recorder == null && recordingStream == null) return
         running = false
         thread?.interrupt()
         thread = null
