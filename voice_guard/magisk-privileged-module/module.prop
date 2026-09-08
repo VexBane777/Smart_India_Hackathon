@@ -1,0 +1,6 @@
+id=voiceguard_privileged_capture
+name=VoiceGuard Privileged Call Capture
+version=v1.0
+versionCode=1
+author=VoiceGuard
+description=Installs the VoiceGuard "privileged" build flavor as a system priv-app and grants it CAPTURE_AUDIO_OUTPUT, so its existing AudioCaptureManager VOICE_CALL cascade can capture real cellular downlink audio instead of falling back to acoustic (mic+speakerphone) capture. See README.md in this directory before installing.

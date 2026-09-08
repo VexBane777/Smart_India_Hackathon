@@ -16,9 +16,15 @@
 ```bash
 cd voice_guard
 flutter pub get
-flutter run            # needs Android device/emulator; set as Default Dialer
+flutter run --flavor standard   # needs Android device/emulator; set as Default Dialer
 ```
 Grant Phone/Mic + overlay permission in Settings. Use **Live Call → Demo Call** to see the risk meter animate without a real call.
+
+`--flavor standard` is required now that `android/app/build.gradle.kts` declares
+product flavors (`standard`/`privileged`) for `magisk-privileged-module/` — see
+that directory's README for the rooted-device privileged-capture tier.
+`privileged` is not a normal dev target; build it only via
+`magisk-privileged-module/build_module.sh`.
 
 ### Backend integration artifact (judge-facing)
 ```bash

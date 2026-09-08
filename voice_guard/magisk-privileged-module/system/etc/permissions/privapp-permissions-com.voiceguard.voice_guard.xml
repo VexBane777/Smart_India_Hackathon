@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Privileged-permission allowlist entry for com.voiceguard.voice_guard.
+  Required on API 26+: placing an APK under /system/priv-app is not by
+  itself sufficient to grant a signature|privileged permission — the
+  platform additionally requires an explicit allowlist entry naming the
+  package and permission, or PackageManagerService denies the grant (and on
+  enforcing builds, can fail to boot with an unlisted priv-app permission).
+  This is the same mechanism BCR (github.com/chenxiaolong/BCR) ships for
+  its own package to obtain the same permission.
+-->
+<permissions>
+    <privapp-permissions package="com.voiceguard.voice_guard">
+        <permission name="android.permission.CAPTURE_AUDIO_OUTPUT" />
+    </privapp-permissions>
+</permissions>

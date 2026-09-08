@@ -9,6 +9,7 @@ class RiskScoreProvider extends ChangeNotifier {
   int _consecutiveHigh = 0;
   String _state = 'normal'; // normal | warn | alert
   bool _hasSignal = true;
+  String? _captureSource; // e.g. "VOICE_CALL", "MIC" — from getCaptureStatus
 
   // Mirrors vaani/app/engine_mock.py's AlertStateMachine (master plan §6):
   // EMA smoothing, then "alert" only after 2+ consecutive windows over
@@ -22,10 +23,22 @@ class RiskScoreProvider extends ChangeNotifier {
   String get state => _state;
   bool get isAlert => _state == 'alert';
   bool get hasSignal => _hasSignal;
+  String? get captureSource => _captureSource;
+  // AudioCaptureManager's SOURCE_CASCADE tries VOICE_CALL first; it only wins
+  // when CAPTURE_AUDIO_OUTPUT is actually granted, which only happens on the
+  // rooted/privileged-flavor install path (see magisk-privileged-module/).
+  // Everyone else falls through to VOICE_RECOGNITION/MIC.
+  bool get isPrivilegedCapture => _captureSource == 'VOICE_CALL';
 
   void setHasSignal(bool v) {
     if (v == _hasSignal) return;
     _hasSignal = v;
+    notifyListeners();
+  }
+
+  void setCaptureSource(String? source) {
+    if (source == _captureSource) return;
+    _captureSource = source;
     notifyListeners();
   }
 

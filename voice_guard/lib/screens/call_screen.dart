@@ -119,7 +119,9 @@ class _CallScreenState extends State<CallScreen> {
     final calls = context.read<CallService>();
     _captureStatusTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       final status = await calls.getCaptureStatus();
-      if (mounted) setState(() => _captureStatus = status);
+      if (!mounted) return;
+      setState(() => _captureStatus = status);
+      context.read<RiskScoreProvider>().setCaptureSource(status.source);
     });
   }
 
@@ -330,6 +332,28 @@ class _CallScreenState extends State<CallScreen> {
           ]),
         ),
         const SizedBox(height: 14),
+
+        if (_captureStatus?.source == 'VOICE_CALL') ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.green.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.verified_user_outlined, color: Colors.green, size: 22),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Privileged capture active — real call audio, not the acoustic (mic) fallback.',
+                  style: TextStyle(fontSize: 11, color: Colors.black87, height: 1.3, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 14),
+        ],
 
         if (_captureStatus != null && !_captureStatus!.hasSignal) ...[
           Container(

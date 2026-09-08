@@ -33,6 +33,28 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // "standard" is the regular Play Store / sideloaded build — CAPTURE_AUDIO_OUTPUT
+    // is not declared, so it behaves exactly as before.
+    // "privileged" additionally declares CAPTURE_AUDIO_OUTPUT (see
+    // src/privileged/AndroidManifest.xml). Declaring it in a normal install is a
+    // no-op — Android only honors it for apps installed as privileged system
+    // apps — so this flavor is only meaningful when installed via the
+    // Magisk module in magisk-privileged-module/ (see that directory's README).
+    // A privileged-flavor build must NEVER be distributed through the Play
+    // Store or a normal sideload: it is not more capable there, and shipping a
+    // build that merely *requests* a signature|privileged permission
+    // pointlessly widens the app's declared permission surface for users who
+    // get no benefit from it.
+    flavorDimensions += "capture"
+    productFlavors {
+        create("standard") {
+            dimension = "capture"
+        }
+        create("privileged") {
+            dimension = "capture"
+        }
+    }
 }
 
 kotlin {

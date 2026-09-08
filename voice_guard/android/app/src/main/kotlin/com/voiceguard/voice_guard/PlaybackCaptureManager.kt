@@ -44,8 +44,14 @@ object PlaybackCaptureManager {
         if (running) return true
         sink = onBytes
 
+        // Only USAGE_UNKNOWN/USAGE_GAME/USAGE_MEDIA are legal match targets for
+        // capturing another app's audio (see android.media.AudioPlaybackCaptureConfiguration.Builder
+        // reference) — USAGE_VOICE_COMMUNICATION can never be matched here, by
+        // platform design, regardless of MediaProjection consent. WhatsApp/Zoom/
+        // Telegram/Meet correctly tag call audio as USAGE_VOICE_COMMUNICATION, so
+        // this capture path cannot see live third-party VoIP call audio at all;
+        // it only ever captures USAGE_MEDIA playback from the target app.
         val config = AudioPlaybackCaptureConfiguration.Builder(projection)
-            .addMatchingUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
             .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
             .build()
 
