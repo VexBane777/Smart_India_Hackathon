@@ -9,6 +9,7 @@ import 'call_screen.dart';
 import 'settings_screen.dart';
 import 'logs_screen.dart';
 import 'protected_call_screen.dart';
+import 'voip_protection_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -115,6 +116,8 @@ class HomeScreen extends StatelessWidget {
           const SizedBox(height: 10),
           Row(children: [
             Expanded(child: _actionBtn(context, icon: Icons.shield_outlined, label: 'Protected Call', subtitle: 'VAANI-to-VAANI', onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProtectedCallScreen())))),
+            const SizedBox(width: 10),
+            Expanded(child: _actionBtn(context, icon: Icons.videocam_outlined, label: 'VoIP Protection', subtitle: 'WhatsApp / Zoom', onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VoipProtectionScreen())))),
           ]),
           const SizedBox(height: 16),
           // Privacy notice

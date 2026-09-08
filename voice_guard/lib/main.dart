@@ -9,6 +9,7 @@ import 'services/tflite_service.dart';
 import 'services/audio_service.dart';
 import 'services/call_service.dart';
 import 'services/notification_service.dart';
+import 'services/playback_capture_service.dart';
 import 'models/call_state.dart';
 
 void main() async {
@@ -44,12 +45,19 @@ void main() async {
     }
   });
 
-  // Pipe real audio bytes from Android EventChannel to AudioService
+  // Pipe real audio bytes from Android EventChannel to AudioService (also
+  // used by PlaybackCaptureManager on the VoIP-protection path, which
+  // pushes bytes through the same event channel/eventSink).
   calls.audioStream.listen((bytes) {
     audio.ingestBytes(bytes);
   }, onError: (e) {
     debugPrint('AudioStream listener: $e');
   });
+
+  // Single registered handler for the shared com.voiceguard/calls
+  // MethodChannel — delegates onCallStateChanged to CallService. Must be
+  // constructed after calls.setCallStateCallback() above.
+  final playbackCapture = PlaybackCaptureService(callService: calls);
 
   runApp(
     MultiProvider(
@@ -61,6 +69,7 @@ void main() async {
         Provider<CallService>.value(value: calls),
         Provider<AudioService>.value(value: audio),
         Provider<NotificationService>.value(value: notifications),
+        Provider<PlaybackCaptureService>.value(value: playbackCapture),
       ],
       child: const VaaniApp(),
     ),
