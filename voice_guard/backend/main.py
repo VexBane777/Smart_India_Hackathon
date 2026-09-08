@@ -27,6 +27,7 @@ _VAANI_DIR = Path(__file__).resolve().parents[2] / "vaani"
 if str(_VAANI_DIR) not in sys.path:
     sys.path.insert(0, str(_VAANI_DIR))
 from app.engine_mock import AlertStateMachine  # noqa: E402
+from signaling import signaling_router
 
 app = FastAPI(
     title="VoiceGuard Integration API",
@@ -34,16 +35,37 @@ app = FastAPI(
     description="Embeddable voice-cloning risk scoring for banking apps, contact centers, and telecom platforms. Accepts LFCC/prosody features (not raw audio).",
 )
 
+app.include_router(signaling_router)
+
 API_KEY = "vg_demo_key"
 
 # Per-session alert state (EMA + consecutive-window tracking) — keyed by
 # the caller-supplied session_id so a stream of analyze-chunk calls for one
 # call behaves like one continuous engine run, matching how the Streamlit
 # demo's WebSocket stream drives a single AlertStateMachine per call.
+#
+# Callers aren't required to supply session_id (it defaults to "default"),
+# and nothing calls /v1/reset automatically — so without expiry, a session's
+# alert state (e.g. two consecutive high-EMA windows) would otherwise leak
+# into the next, unrelated call that reuses the same id, and _SESSIONS would
+# grow without bound as distinct ids accumulate. SESSION_TTL_SECONDS bounds
+# both: a session idle longer than the TTL is treated as a new call.
+SESSION_TTL_SECONDS = 120
 _SESSIONS: dict[str, AlertStateMachine] = {}
+_LAST_SEEN: dict[str, float] = {}
+
+
+def _evict_stale_sessions() -> None:
+    now = time.monotonic()
+    stale = [sid for sid, t in _LAST_SEEN.items() if now - t > SESSION_TTL_SECONDS]
+    for sid in stale:
+        _SESSIONS.pop(sid, None)
+        _LAST_SEEN.pop(sid, None)
 
 
 def _session(session_id: str) -> AlertStateMachine:
+    _evict_stale_sessions()
+    _LAST_SEEN[session_id] = time.monotonic()
     sm = _SESSIONS.get(session_id)
     if sm is None:
         sm = AlertStateMachine()
@@ -118,6 +140,7 @@ def reset_session(session_id: str, x_api_key: Optional[str] = Header(None)):
     """Clear EMA/consecutive-window state for a session — call at the start of each new call."""
     _check_key(x_api_key)
     _SESSIONS.pop(session_id, None)
+    _LAST_SEEN.pop(session_id, None)
     return {"reset": session_id}
 
 @app.post("/v1/alert", tags=["Alerting"])

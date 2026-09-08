@@ -1,7 +1,9 @@
 package com.voiceguard.voice_guard
 
+import android.app.Activity
 import android.app.role.RoleManager
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -14,6 +16,12 @@ class MainActivity : FlutterActivity() {
     private val methodChannel = "com.voiceguard/calls"
     private val eventChannel = "com.voiceguard/audio_stream"
     private var eventSink: EventChannel.EventSink? = null
+    private val webrtcAudioTapChannel = "com.voiceguard/webrtc_audio_tap"
+    private val webrtcAudioTapEventChannel = "com.voiceguard/webrtc_audio_tap_stream"
+    private var webrtcAudioTapSink: EventChannel.EventSink? = null
+    private var pendingProjectionResult: MethodChannel.Result? = null
+    private var pendingMediaProjection: android.media.projection.MediaProjection? = null
+    private val PLAYBACK_CAPTURE_REQUEST_CODE = 2001
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -50,6 +58,15 @@ class MainActivity : FlutterActivity() {
                     AudioCaptureManager.stop()
                     result.success(null)
                 }
+                "getLastRecordingPath" -> {
+                    result.success(AudioCaptureManager.lastRecordingPath)
+                }
+                "getCaptureStatus" -> {
+                    result.success(mapOf(
+                        "source" to AudioCaptureManager.activeSourceName,
+                        "hasSignal" to AudioCaptureManager.hasRecentSignal
+                    ))
+                }
                 "placeCall" -> {
                     val number = call.argument<String>("number") ?: ""
                     try {
@@ -75,9 +92,29 @@ class MainActivity : FlutterActivity() {
                 }
                 "toggleSpeakerphone" -> {
                     val enable = call.argument<Boolean>("enable") ?: true
-                    val am = getSystemService(android.media.AudioManager::class.java)
-                    am.isSpeakerphoneOn = enable
-                    result.success(am.isSpeakerphoneOn)
+                    if (InCallServiceImpl.hasActiveCall()) {
+                        // Real telecom call: must route via InCallService.setAudioRoute —
+                        // AudioManager.isSpeakerphoneOn gets silently overridden by
+                        // Telecom's own CallAudioRouteStateMachine otherwise.
+                        InCallServiceImpl.setSpeakerphone(enable)
+                        result.success(enable)
+                    } else {
+                        // No real call (e.g. the Live Mic self-test) — plain AudioManager works.
+                        val am = getSystemService(android.media.AudioManager::class.java)
+                        am.isSpeakerphoneOn = enable
+                        result.success(am.isSpeakerphoneOn)
+                    }
+                }
+                "toggleMicMute" -> {
+                    val muted = call.argument<Boolean>("muted") ?: true
+                    if (InCallServiceImpl.hasActiveCall()) {
+                        InCallServiceImpl.setMuted(muted)
+                        result.success(muted)
+                    } else {
+                        val am = getSystemService(android.media.AudioManager::class.java)
+                        am.isMicrophoneMute = muted
+                        result.success(am.isMicrophoneMute)
+                    }
                 }
                 "showOverlay" -> {
                     val score = (call.argument<Double>("riskScore") ?: 0.0)
@@ -87,6 +124,32 @@ class MainActivity : FlutterActivity() {
                 }
                 "hideOverlay" -> {
                     OverlayService.hide(this)
+                    result.success(null)
+                }
+                "requestPlaybackCaptureConsent" -> {
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                        result.error("UNSUPPORTED", "Requires Android 10+", null)
+                    } else {
+                        val mpm = getSystemService(MediaProjectionManager::class.java)
+                        pendingProjectionResult = result
+                        startActivityForResult(mpm.createScreenCaptureIntent(), PLAYBACK_CAPTURE_REQUEST_CODE)
+                    }
+                }
+                "startPlaybackCapture" -> {
+                    val projection = pendingMediaProjection
+                    if (projection == null) {
+                        result.success(false)
+                    } else {
+                        val started = PlaybackCaptureManager.start(this, projection) { bytes ->
+                            eventSink?.success(bytes)
+                        }
+                        result.success(started)
+                    }
+                }
+                "stopPlaybackCapture" -> {
+                    PlaybackCaptureManager.stop()
+                    pendingMediaProjection?.stop()
+                    pendingMediaProjection = null
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -106,6 +169,59 @@ class MainActivity : FlutterActivity() {
                 }
             }
         )
+
+        // Taps raw PCM off the remote party's WebRTC audio track for the
+        // Protected Call scoring pipeline — see RemoteAudioTap for why this
+        // exists (flutter_webrtc has no Dart-level RTCAudioSink equivalent).
+        val webrtcPlugin = flutterEngine.plugins.get(
+            com.cloudwebrtc.webrtc.FlutterWebRTCPlugin::class.java
+        ) as? com.cloudwebrtc.webrtc.FlutterWebRTCPlugin
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, webrtcAudioTapChannel).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "attach" -> {
+                    val trackId = call.argument<String>("trackId")
+                    if (trackId == null || webrtcPlugin == null) {
+                        result.success(false)
+                    } else {
+                        val attached = RemoteAudioTap.attach(webrtcPlugin, trackId) { bytes ->
+                            runOnUiThread { webrtcAudioTapSink?.success(bytes) }
+                        }
+                        result.success(attached)
+                    }
+                }
+                "detach" -> {
+                    RemoteAudioTap.detach()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, webrtcAudioTapEventChannel).setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(args: Any?, sink: EventChannel.EventSink) {
+                    webrtcAudioTapSink = sink
+                }
+                override fun onCancel(args: Any?) {
+                    webrtcAudioTapSink = null
+                }
+            }
+        )
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != PLAYBACK_CAPTURE_REQUEST_CODE) return
+        val granted = resultCode == Activity.RESULT_OK && data != null
+        if (granted) {
+            val mpm = getSystemService(MediaProjectionManager::class.java)
+            pendingMediaProjection = mpm.getMediaProjection(resultCode, data!!)
+            startForegroundService(Intent(this, PlaybackCaptureForegroundService::class.java))
+        }
+        pendingProjectionResult?.success(granted)
+        pendingProjectionResult = null
+        channel?.invokeMethod("onPlaybackCaptureConsent", mapOf("granted" to granted))
     }
 
     private fun isDefaultDialer(): Boolean {
@@ -142,6 +258,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        PlaybackCaptureManager.stop()
+        pendingMediaProjection?.stop()
         super.onDestroy()
         if (instance == this) {
             instance = null

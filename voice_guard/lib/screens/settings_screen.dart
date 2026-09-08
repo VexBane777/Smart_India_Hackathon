@@ -4,6 +4,7 @@ import '../providers/settings_provider.dart';
 import '../services/call_service.dart';
 import '../utils/constants.dart';
 import '../utils/permissions.dart';
+import '../widgets/permission_card.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -60,11 +61,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         const SizedBox(height: 14),
         _section('Permissions & Dialer'),
-        _permTile(icon: Icons.phone, title: 'Phone & Microphone', subtitle: 'Required to detect calls and capture audio', granted: _hasPhonePerms, onTap: () async { await PermissionHelper.requestPhonePermissions(); _refresh(); }),
+        PermissionCard(icon: Icons.phone, title: 'Phone & Microphone', subtitle: 'Required to detect calls and capture audio', granted: _hasPhonePerms, actionLabel: _hasPhonePerms ? 'Granted' : 'Grant', onAction: () async { await PermissionHelper.requestPhonePermissions(); _refresh(); }),
         const SizedBox(height: 8),
-        _permTile(icon: Icons.open_in_new, title: 'Display over other apps', subtitle: 'Required for in-call warning overlay', granted: _hasOverlay, onTap: () async { await CallService().requestOverlayPermission(); _refresh(); }),
+        PermissionCard(icon: Icons.open_in_new, title: 'Display over other apps', subtitle: 'Required for in-call warning overlay', granted: _hasOverlay, actionLabel: _hasOverlay ? 'Granted' : 'Grant', onAction: () async { await CallService().requestOverlayPermission(); _refresh(); }),
         const SizedBox(height: 8),
-        _permTile(icon: Icons.phone_in_talk, title: 'Default Dialer', subtitle: _isDefaultDialer ? '${AppConstants.appName} is your default dialer' : 'Set as default to intercept calls via InCallService', granted: _isDefaultDialer, onTap: () async { await CallService().setAsDefaultDialer(); _refresh(); }),
+        PermissionCard(icon: Icons.phone_in_talk, title: 'Default Dialer', subtitle: _isDefaultDialer ? '${AppConstants.appName} is your default dialer' : 'Set as default to intercept calls via InCallService', granted: _isDefaultDialer, actionLabel: _isDefaultDialer ? 'Granted' : 'Grant', onAction: () async { await CallService().setAsDefaultDialer(); _refresh(); }),
         const SizedBox(height: 14),
         _section('Privacy & Compliance'),
         Container(
@@ -112,16 +113,5 @@ class _SettingsScreenState extends State<SettingsScreen> {
         margin: const EdgeInsets.only(bottom: 8),
         decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.black12)),
         child: SwitchListTile(value: value, onChanged: onChanged, title: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)), subtitle: Text(sub, style: const TextStyle(fontSize: 11, color: Colors.black54)), activeThumbColor: AppColors.primary),
-      );
-  Widget _permTile({required IconData icon, required String title, required String subtitle, required bool granted, required VoidCallback onTap}) => Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: granted ? AppColors.verified.withValues(alpha: 0.3) : Colors.black12)),
-        child: Row(children: [
-          Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: granted ? AppColors.verifiedBg : const Color(0xFFF5F5F5), borderRadius: BorderRadius.circular(10)), child: Icon(icon, size: 18, color: granted ? AppColors.verified : Colors.black54)),
-          const SizedBox(width: 10),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)), Text(subtitle, style: const TextStyle(fontSize: 10, color: Colors.black54), maxLines: 2)])),
-          const SizedBox(width: 8),
-          FilledButton(onPressed: onTap, style: FilledButton.styleFrom(backgroundColor: granted ? AppColors.verified : AppColors.primary, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6)), child: Text(granted ? 'Granted' : 'Grant', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700))),
-        ]),
       );
 }

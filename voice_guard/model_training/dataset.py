@@ -54,22 +54,25 @@ def _load_mono_16k(path: Path) -> np.ndarray:
     return data.astype(np.float32)
 
 
-def _maybe_channel(pcm: np.ndarray, recipe: str | None) -> np.ndarray:
+def _maybe_channel(
+    pcm: np.ndarray, recipe: str | None, rng: np.random.Generator
+) -> np.ndarray:
     if recipe is None:
         return pcm
     from telechannel.pipeline import process_clip  # vaani package
 
-    return process_clip(pcm, recipe, SAMPLE_RATE)
+    return process_clip(pcm, recipe, SAMPLE_RATE, rng=rng)
 
 
 def _process_file(
-    args: tuple[Path, int, list[str | None]],
+    args: tuple[Path, int, list[str | None], np.random.SeedSequence],
 ) -> list[Example]:
-    wav_path, label, channel_recipes = args
+    wav_path, label, channel_recipes, seed_seq = args
+    rng = np.random.default_rng(seed_seq)
     pcm = _load_mono_16k(wav_path)
     out: list[Example] = []
     for recipe in channel_recipes:
-        degraded = _maybe_channel(pcm, recipe)
+        degraded = _maybe_channel(pcm, recipe, rng)
         for chunk in chunk_audio(degraded):
             out.append(
                 Example(
@@ -90,6 +93,7 @@ def build_examples(
     fake_dir: Path | list[Path],
     channel_recipes: list[str | None] = (None,),
     workers: int | None = None,
+    seed: int = 0,
 ) -> list[Example]:
     """Extracts (features, label) examples from one or more real/fake WAV
     dirs, optionally degraded through each channel recipe.
@@ -97,12 +101,19 @@ def build_examples(
     Parallelized across files with a process pool: each file's channel
     degradation (ffmpeg subprocess roundtrips) and feature extraction are
     CPU-bound and independent, so this is a straightforward multi-core win
-    on a large corpus."""
+    on a large corpus. Each file gets its own child SeedSequence (spawned
+    from the single top-level seed) so degradation stays reproducible and
+    independent per file even though workers run as separate processes —
+    a single shared np.random.Generator can't be meaningfully advanced
+    across a process pool the way it can in-process."""
     tasks: list[tuple[Path, int, list[str | None]]] = []
     for label, dirs in ((0, real_dir), (1, fake_dir)):
         for directory in _as_dir_list(dirs):
             for wav_path in sorted(Path(directory).glob("*.wav")):
                 tasks.append((wav_path, label, list(channel_recipes)))
+
+    seed_seqs = np.random.SeedSequence(seed).spawn(len(tasks))
+    tasks = [(*t, ss) for t, ss in zip(tasks, seed_seqs)]
 
     workers = workers or os.cpu_count() or 1
     examples: list[Example] = []

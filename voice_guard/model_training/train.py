@@ -73,7 +73,8 @@ def main() -> None:
         nargs="*",
         default=[None],
         help="TeleChannel recipe names to degrade training audio through "
-        "(e.g. whatsapp volte cellular_3g); pass 'clean' or omit for none.",
+        "(e.g. whatsapp volte cellular_3g clean); omit for no channel "
+        "processing at all.",
     )
     ap.add_argument(
         "--device",
@@ -84,6 +85,7 @@ def main() -> None:
         "not matrix math, so a GPU wouldn't help there).",
     )
     ap.add_argument("--workers", type=int, default=None, help="process-pool size for feature extraction")
+    ap.add_argument("--seed", type=int, default=0, help="RNG seed for channel degradation.")
     args = ap.parse_args()
 
     device = args.device
@@ -91,14 +93,17 @@ def main() -> None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Training device: {device}")
 
-    recipes = [None if r in (None, "clean") else r for r in args.channel]
+    recipes = list(args.channel)
     print(f"Building examples (channels={recipes})...")
-    examples = build_examples(args.real, args.fake, channel_recipes=recipes, workers=args.workers)
+    examples = build_examples(
+        args.real, args.fake, channel_recipes=recipes, workers=args.workers, seed=args.seed
+    )
     if args.real_clean or args.fake_clean:
         print(f"Building clean (no-degradation) examples from "
               f"{len(args.real_clean)} real-clean + {len(args.fake_clean)} fake-clean dirs...")
         examples += build_examples(
-            args.real_clean or [], args.fake_clean or [], channel_recipes=[None], workers=args.workers
+            args.real_clean or [], args.fake_clean or [], channel_recipes=[None],
+            workers=args.workers, seed=args.seed,
         )
     train_ex, val_ex = split_by_source(examples)
     print(f"{len(train_ex)} train windows / {len(val_ex)} val windows "
