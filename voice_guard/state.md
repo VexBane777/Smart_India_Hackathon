@@ -550,15 +550,75 @@ confirmed leaving it alone rather than risk another session's state.
 disk space *before* kicking off several parallel multi-GB downloads, not
 after hitting a low-space scare mid-flight.
 
-**Not done yet, pick up here next:** Hindi XTTS cloning (`gen_accents_fake.py
---lang hi`, blocked only on the English run finishing first — single GPU,
-avoiding VRAM contention, not a real blocker); `split_accents.py` once fake
-cells fill in; then the actual `train.py` retrain (nothing has been trained
-yet this session — everything above is data collection/generation, not
-training, confirmed explicitly to the user mid-session when asked). See
-`data/README.md`'s "Folding into training" section for the exact recipe —
-now with far more `--real-clean`/`--fake-clean` directories to add than
-that doc's example command shows.
+**Update, later same session — full autonomous run through actual retraining:**
+User handed off full autonomy ("work until done, make it production-ready,
+commit/push at checkpoints"). Completed: Hindi XTTS cloning (400 clips),
+DECRO ingestion (English spoof only, 7000 clips — its bona-fide side is
+literally re-partitioned ASVspoof2019 LA, already in this corpus, so only
+spoof was pulled), MUSAN noise augmentation (`augment_with_noise.py`,
+8519 en_native + 3000 hi_native clips), `split_accents.py` (speaker-disjoint
+train/held, all 8 cells, zero missing files), and — the actual first-ever
+`train.py` retrain of this session.
+
+**`hi_native`'s real training split had 92k files** (wildly disproportionate
+vs. every other cell's few thousand) — capped to a random 8000-file sample
+(`data/accents_split/train/real/hi_native_capped/`) before training, or
+feature extraction alone would've taken impractically long and skewed the
+corpus hard toward Hindi.
+
+**Training attempt 1** (`runs/voice_guard_v4_attempt1/`, `--channel whatsapp
+volte` — 2 recipes): `final_val_eer=0.0812` (in-distribution, comparable to
+v3's 0.0793), but **cross-generator held-out EER (In-the-Wild) = 0.2028 —
+worse than v3's 0.1624**, a real regression despite far more training data.
+Root cause identified, not just noticed: I dropped `clean` from the
+`--channel` list, not matching the documented v3 recipe (`--channel whatsapp
+volte clean`, 3 recipes) — `clean` is a real registered light-degradation
+TeleChannel recipe (see `train.py` README's own note on this), not "no
+processing", so the base ASVspoof2019 corpus got 1/3 less channel-diversity
+exposure than v3 had. **Did not deploy attempt 1** — a regression on the
+metric that matters most (cross-generator generalization) doesn't meet "make
+the model production-ready" no matter how much bigger the training set got.
+Archived (not deleted) at `runs/voice_guard_v4_attempt1/` alongside its log
+(`runs/train_v4_attempt1_log.txt`) for the record.
+
+**Training attempt 2** in progress as of this update — same corpus, `--channel
+whatsapp volte clean` (matching v3 exactly). Per-cell breakdown from attempt
+1's `eval_accent_cells.py` run, worth carrying forward regardless of which
+attempt ships: `en_native` EER 0.0614, `en_foreign` 0.1333, `hi_native`
+0.1545, `hi_foreign` 0.1833 (only 11 windows/6 files — not statistically
+reliable, matches the known-thin real/hi_foreign gap). Hindi generalizing
+noticeably worse than English is expected (English had the full ASVspoof
+base corpus behind it; Hindi is entirely new this session) but is a real,
+now-measured gap, not a guess.
+
+**Memory constraint discovered and worked around this session:** this
+machine has only ~15.4GB RAM, and background-tracked heavy processes
+(training, `split_accents.py`, dataset ingestion) got auto-killed by
+low-memory monitoring repeatedly (observed free RAM oscillating 0.4–1.1GB
+under load, driven by Windows Defender real-time-scanning every new file
+plus ordinary desktop-app load — Discord, browser, etc. — this is a
+general-use machine, not a dedicated headless box). **Fix: launch heavy/long
+Python jobs via `nohup cmd &` + `disown` (fully OS-detached), not as
+tool-tracked background tasks** — detached processes survived every memory
+event that killed tracked ones. Also: run moderate-length jobs in the
+foreground when practical (`split_accents.py` succeeded this way after
+failing backgrounded) — the low-memory killer only ever targeted
+tool-tracked background tasks, never plain foreground calls or detached
+`nohup` processes. Keep `--workers` conservative (2, down from the
+documented 8) on this machine specifically.
+
+**Not done yet, pick up here next (if this session ends before finishing):**
+wait for training attempt 2, compare its cross-generator held-out EER against
+v3's 0.1624 — only deploy (copy `model.onnx` to `assets/models/`) if it's at
+or better than that number, not just "bigger dataset therefore assumed
+better". If attempt 2 still regresses, don't try a third blind attempt —
+stop and think about *why* (candidates not yet tested: the tiny 63→64→32→2
+MLP may simply be under-capacity for a much more heterogeneous task now;
+the disproportionate real/hi_native volume, even capped to 8000, may still
+be pulling the decision boundary away from what the ITW held-out set needs;
+worth an ablation — retrain on the *old* v3 corpus alone with the corrected
+`clean` channel recipe, to isolate "channel-recipe bug" from "new data hurt
+generalization" as two separate explanations before concluding either one).
 
 ## Housekeeping done this session
 

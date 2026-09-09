@@ -85,6 +85,8 @@ def main() -> None:
                      help="uniform random SNR range in dB (lower = noisier)")
     ap.add_argument("--sample-rate", type=int, default=16000)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--limit", type=int, default=None,
+                     help="cap on clips augmented (random sample); omit for all clips in --real-dir")
     args = ap.parse_args()
 
     noise_files: list[Path] = []
@@ -104,6 +106,8 @@ def main() -> None:
     if not speech_files:
         print(f"No WAVs found in {args.real_dir}", file=sys.stderr)
         raise SystemExit(1)
+    if args.limit is not None and len(speech_files) > args.limit:
+        speech_files = rng.sample(speech_files, args.limit)
 
     n_done = 0
     for speech_path in speech_files:
