@@ -2,6 +2,7 @@ package org.vaani.mobile
 
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -20,5 +21,21 @@ class MainActivity : FlutterActivity() {
                     result.notImplemented()
                 }
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "vaani/decode")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "decodeFile") {
+                    val path = call.argument<String>("path")!!
+                    try {
+                        val pcm = AudioDecodeBridge.decodeToPcm16kMono(path)
+                        result.success(pcm.map { it.toDouble() })
+                    } catch (e: Exception) {
+                        result.error("decode_failed", e.message, null)
+                    }
+                } else {
+                    result.notImplemented()
+                }
+            }
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "vaani/mic")
+            .setStreamHandler(AudioCaptureBridge())
     }
 }
