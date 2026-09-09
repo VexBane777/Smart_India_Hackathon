@@ -444,6 +444,122 @@ not enough** — at that point LCNN's extra temporal capacity might
 genuinely earn its much larger integration cost. Don't re-litigate this
 research from scratch next session; this paragraph is the record of why.
 
+## Dataset expansion session (2026-09-09, later same day)
+
+Picked up the accent/clone data pipeline (scaffolding only as of the
+previous entry above) and actually ran it, plus went well beyond the
+originally-scoped `data/README.md` sources per explicit instruction to
+maximize breadth. Scope stayed **en/hi only** (a deliberate choice — see
+below) and **XTTS-v2 proceeded as already documented** (non-commercial CPML,
+fine for this prototype) — both confirmed with the user before expanding
+further, since `vaani/00_MASTER_PLAN.md` has a broader/conflicting plan for
+a *different* module (TeleChannel) that doesn't bind voice_guard.
+
+**Sources actually ingested this session** (new `data/prep_*.py` scripts,
+one per source, each with full provenance/license/gotcha notes in its own
+docstring — read those before re-running, don't re-derive from scratch):
+Common Voice 17.0 (`fixie-ai` mirror — official `mozilla-foundation` repo is
+deprecated, Mozilla moved to Mozilla Data Collective Oct 2025), VCTK (108
+speakers, real accent labels pulled cheaply via a 3.6KB Kaggle metadata
+file rather than the 10.94GB official zip), Svarah (genuine Indian-accented
+English, 6656 clips), OpenSLR SLR103 (99,925+3,843 8kHz native-telephony
+Hindi clips — by far the largest single source), IndicTTS-Hindi,
+IndicVoices-R_Hindi (spontaneous/conversational, different register than
+the read-speech sources), CodecFake (neural-codec-resynthesis fakes, a
+different attack family than ASVspoof/XTTS), MLAAD (580 clips / **116
+distinct TTS architectures** — ElevenLabs, ChatTTS, F5-TTS, FireRedTTS-2.0,
+Cartesia Sonic-3, etc. — by far the broadest generator diversity found).
+Plus the two user-provided self-recordings (`ingest_self_recordings.py`,
+already-existing script, finally actually used).
+
+**Recurring technical blocker, same root cause every time:** `torchcodec`'s
+native DLL fails to load on this Windows box (`libtorchcodec_core{4-9}.dll`
+— FFmpeg shared-library mismatch) — hit in `datasets`' `Audio` feature
+decode AND inside XTTS's own `torchaudio.load()` call. Fixed the same way
+everywhere: decode via `soundfile` from raw bytes instead (`Audio(decode=
+False)` for HF datasets; monkeypatched `torchaudio.load` itself for XTTS,
+since its `tts_to_file(speaker_wav=...)` only accepts a path, not a
+preloaded tensor — see `gen_accents_fake.py`'s `_patch_torchaudio_load_with_
+soundfile()`). If a future script hits the same DLL error, don't reinstall/
+fight torchcodec — apply this same workaround.
+
+**XTTS-v2 setup, separately:** runs in an isolated `.venv_tts` (Python 3.13
+— original `TTS` PyPI package doesn't support it, used the maintained
+`coqui-tts` fork + `transformers==4.57.1` + `coqui-tts[codec]` instead), so
+the main `.venv313`'s working torch+cuda for `train.py` couldn't be
+accidentally broken by TTS's own pinned deps. Model weights: don't let
+`TTS.api.TTS()` download them itself on a congested link — its downloader
+is plain `requests`, no resume, dies and restarts from zero on any
+connection drop (observed: died at 1.18GB, twice). Pre-download via
+`huggingface_hub.snapshot_download(repo_id='coqui/XTTS-v2', local_dir=...)`
+(properly resumable) and pass `--local-model-dir` instead. Also needs
+`COQUI_TOS_AGREED=1` env var set (its license-agreement prompt uses
+`input()`, which hangs forever / EOFErrors under `nohup`/background).
+
+**Sources found but NOT pulled — retry after the demo, revisit this list
+rather than re-researching from scratch:**
+- **DECRO** (English+Chinese cross-lingual, ~55k samples) — Zenodo was down
+  (504 Gateway Timeout, twice) at research time, purely transient infra
+  issue on their end, not a real access blocker. Just retry
+  `https://zenodo.org/record/7603208`.
+- **Deepfake-Eval-2024** (real in-the-wild flagged deepfakes, 42 languages,
+  56.5hrs audio) — gated on HF (`nuriachandra/Deepfake-Eval-2024`), needs a
+  token/login.
+- **IndieFake Dataset** (would've been ideal — genuine Indian-accented
+  English deepfakes, from IIT Ropar) — **not actually released yet** as of
+  this session; the paper (arXiv:2506.19014) says "will be publicly
+  available upon acceptance." Check again later; a search-engine summary
+  incorrectly implied it was already downloadable — verified via the actual
+  paper text that it isn't.
+- **HAV-DF** (Hindi-specific audio-video deepfakes, arXiv:2411.15457) — no
+  public download link found; also video-bundled (faceswap+lipsync+clone
+  together), would need extra work to pull audio-only even if found.
+- **MLAAD's Hindi slice** — the 580-clip English pull above used a small
+  Kaggle mirror sample; the *full* 45GB `trapka/mlaadthe-multi-languag...`
+  Kaggle mirror likely has more languages, but confirming Hindi's presence
+  requires paginating deep into its ~90k-file listing (got through 1200
+  files, still all "ar" alphabetically, before giving up) or just
+  committing to the full 45GB pull blind. Worth doing post-demo when
+  bandwidth/disk aren't both under pressure.
+- **FoR (Fake-or-Real)**, 17.2GB Kaggle, English, 33 synthetic voices across
+  major cloud TTS providers — started downloading, then **killed
+  deliberately** when free disk space hit ~50GB (see disk-space entry
+  below), barely any progress lost. Straightforward to resume:
+  `kaggle datasets download -d mohammedabdeldayem/the-fake-or-real-dataset
+  -p data/for_dataset --unzip`.
+- **SpoofCeleb** — ruled out **permanently, not a retry-later item**: gated
+  to officially-affiliated institutional email addresses only, explicitly
+  rejects personal emails. No path to this without an institutional
+  affiliation on record with the dataset maintainers.
+
+**Disk space emergency, mid-session:** free space on `C:` hit ~50GB while
+several GB-scale downloads were still in flight (real risk of a full-disk
+write failure corrupting an in-progress extraction). Freed ~45GB total,
+in order: (1) deleted already-ingested raw archives once confirmed their
+data had already landed in `accent_manifest.csv`/`data/real`+`data/fake`
+(OpenSLR tarballs, ASVspoof2019 LA's `data/extracted/` tree, Svarah's
+parquet) — safe because the manifest is the durable record, not the
+archives; (2) `pip cache purge` (~4GB, pure cache, always safe); (3)
+emptied the Recycle Bin (~30GB — by far the biggest single win, zero risk,
+already user-deleted content). Deliberately did **not** touch
+`%TEMP%\claude` (15.6GB) — that's shared working storage for *all* Claude
+Code sessions on this machine, including possibly other still-running ones
+per this file's own "many parallel sessions" note above; user explicitly
+confirmed leaving it alone rather than risk another session's state.
+**Lesson for next time a big multi-source pull is planned:** check free
+disk space *before* kicking off several parallel multi-GB downloads, not
+after hitting a low-space scare mid-flight.
+
+**Not done yet, pick up here next:** Hindi XTTS cloning (`gen_accents_fake.py
+--lang hi`, blocked only on the English run finishing first — single GPU,
+avoiding VRAM contention, not a real blocker); `split_accents.py` once fake
+cells fill in; then the actual `train.py` retrain (nothing has been trained
+yet this session — everything above is data collection/generation, not
+training, confirmed explicitly to the user mid-session when asked). See
+`data/README.md`'s "Folding into training" section for the exact recipe —
+now with far more `--real-clean`/`--fake-clean` directories to add than
+that doc's example command shows.
+
 ## Housekeeping done this session
 
 - Merged `origin/vaani`'s 3 new commits (full-corpus retrain + docs) with
