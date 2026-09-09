@@ -49,13 +49,27 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "startCallDetection" -> {
-                    AudioCaptureManager.start(this) { bytes ->
-                        eventSink?.success(bytes)
+                    if (InCallServiceImpl.hasActiveCall()) {
+                        // Real telecom call: route via InCallServiceImpl so the speaker
+                        // gets forced (needed for the mic to overhear the far end) instead
+                        // of poking AudioManager/AudioCaptureManager directly.
+                        InCallServiceImpl.startDetection(this) { bytes ->
+                            eventSink?.success(bytes)
+                        }
+                    } else {
+                        // No real call (e.g. the Live Mic self-test) — no routing to touch.
+                        AudioCaptureManager.start(this) { bytes ->
+                            eventSink?.success(bytes)
+                        }
                     }
                     result.success(null)
                 }
                 "stopCallDetection" -> {
-                    AudioCaptureManager.stop()
+                    if (InCallServiceImpl.hasActiveCall()) {
+                        InCallServiceImpl.stopDetection()
+                    } else {
+                        AudioCaptureManager.stop()
+                    }
                     result.success(null)
                 }
                 "getLastRecordingPath" -> {

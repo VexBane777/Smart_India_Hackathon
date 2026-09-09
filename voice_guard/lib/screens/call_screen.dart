@@ -25,6 +25,7 @@ class _CallScreenState extends State<CallScreen> {
   bool _speakerphoneOn = false;
   bool _micMuted = false;
   bool _liveMicActive = false;
+  bool _detectionActive = false;
   bool _isDefaultDialer = false;
   DateTime? _callStartTime;
   List<double> _liveWaveform = const [];
@@ -146,18 +147,15 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> _startOutgoingCall() async {
     if (_dialNumber.trim().isEmpty) return;
     final calls = context.read<CallService>();
-    final audio = context.read<AudioService>();
     final callState = context.read<CallStateProvider>();
-    final risk = context.read<RiskScoreProvider>();
 
     _callStartTime = DateTime.now();
-    risk.reset();
-    audio.clearBuffer();
-    audio.startScoring();
     callState.setStatus(CallStatus.dialing, number: _dialNumber);
 
-    await calls.startCallDetection();
-    _startCaptureStatusPolling();
+    // Detection (forced speaker + capture) is opt-in — see _toggleDetection —
+    // so placing a call no longer auto-starts it. This lets the call route
+    // normally (including to an already-connected headset) until the user
+    // explicitly asks to monitor it.
     final placed = await calls.placeCall(_dialNumber);
     if (!placed) {
       if (mounted) {
@@ -190,6 +188,31 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  /// Toggles detection (forced-speaker acoustic capture) for a real, already-
+  /// connected call. Kept separate from _toggleLiveMic, which is the no-call
+  /// self-test path. Off by default so a normal call — including one routed
+  /// to a connected BT/wired headset — behaves like any other call until the
+  /// user explicitly asks to monitor it.
+  Future<void> _toggleDetection() async {
+    final calls = context.read<CallService>();
+    final audio = context.read<AudioService>();
+    final risk = context.read<RiskScoreProvider>();
+
+    if (_detectionActive) {
+      await calls.stopCallDetection();
+      _stopCaptureStatusPolling();
+      audio.stopScoring();
+      setState(() => _detectionActive = false);
+    } else {
+      risk.reset();
+      audio.clearBuffer();
+      audio.startScoring();
+      await calls.startCallDetection();
+      _startCaptureStatusPolling();
+      setState(() => _detectionActive = true);
+    }
+  }
+
   Future<void> _endCall() async {
     final calls = context.read<CallService>();
     final audio = context.read<AudioService>();
@@ -206,6 +229,7 @@ class _CallScreenState extends State<CallScreen> {
       _liveMicActive = false;
       _speakerphoneOn = false;
       _micMuted = false;
+      _detectionActive = false;
     });
     audio.stopScoring();
     await calls.endCall();
@@ -332,6 +356,51 @@ class _CallScreenState extends State<CallScreen> {
           ]),
         ),
         const SizedBox(height: 14),
+
+        // Detection is opt-in for real calls (not the Live Mic self-test):
+        // starting it forces the speaker (needed for the mic to overhear the
+        // far end) and overrides a connected headset for the call's duration.
+        if (!_liveMicActive && call.state.isActive) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _detectionActive ? AppColors.primary.withValues(alpha: 0.08) : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _detectionActive ? AppColors.primary.withValues(alpha: 0.3) : Colors.black12),
+            ),
+            child: Row(children: [
+              Icon(_detectionActive ? Icons.shield : Icons.shield_outlined,
+                  color: _detectionActive ? AppColors.primary : Colors.black54, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(_detectionActive ? 'Detection running' : 'Detection off',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                  Text(
+                    _detectionActive
+                        ? 'Speaker forced on so the mic can monitor this call.'
+                        : 'Call audio routes normally (including to a connected headset).',
+                    style: TextStyle(fontSize: 10, color: Colors.black.withValues(alpha: 0.6)),
+                  ),
+                ]),
+              ),
+              TextButton(
+                onPressed: _toggleDetection,
+                style: TextButton.styleFrom(
+                  backgroundColor: _detectionActive ? Colors.black12 : AppColors.primary,
+                  foregroundColor: _detectionActive ? Colors.black87 : Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(_detectionActive ? 'Stop' : 'Start Detection',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 14),
+        ],
 
         if (_captureStatus?.source == 'VOICE_CALL') ...[
           Container(

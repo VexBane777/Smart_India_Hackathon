@@ -53,6 +53,66 @@ class InCallServiceImpl : InCallService() {
 
         fun hasActiveCall(): Boolean = activeCall != null
 
+        // Whether detection (forced-speaker acoustic capture) is currently
+        // running for the active call. Detection is opt-in via startDetection/
+        // stopDetection — a plain call never forces routing or starts capture
+        // on its own, so headphones/normal earpiece behavior "just work" until
+        // the user explicitly asks to monitor the call.
+        private var detectionActive = false
+        fun isDetectionActive(): Boolean = detectionActive
+
+        /**
+         * Starts detection for the current active call: forces the speaker route
+         * (the far end's voice must be physically audible in the room for the mic
+         * to "overhear" it — see AudioCaptureManager's docstring on why AudioRecord
+         * can't tap the call stream directly) and starts AudioCaptureManager.
+         * A connected BT/wired headset is deliberately overridden here, since
+         * routing to it would send that audio to the ear instead of the room and
+         * the mic would receive nothing.
+         */
+        fun startDetection(context: android.content.Context, onBytes: ((ByteArray) -> Unit)? = null): Boolean {
+            val svc = instance ?: return false
+            if (activeCall == null) return false
+            return try {
+                svc.getSystemService(AudioManager::class.java)?.mode = AudioManager.MODE_IN_COMMUNICATION
+                svc.setAudioRoute(CallAudioState.ROUTE_SPEAKER)
+                AudioCaptureManager.start(context, onBytes)
+                detectionActive = true
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "startDetection failed", e)
+                false
+            }
+        }
+
+        /**
+         * Stops detection and restores normal call routing: prefers a connected
+         * BT/wired headset if Telecom reports one available, otherwise earpiece
+         * (not speaker) — the user is back to a normal phone call.
+         */
+        fun stopDetection(): Boolean {
+            return try {
+                AudioCaptureManager.stop()
+                detectionActive = false
+                val svc = instance
+                if (svc != null && activeCall != null) {
+                    val supportedRoutes = svc.callAudioState?.supportedRouteMask ?: 0
+                    when {
+                        supportedRoutes and CallAudioState.ROUTE_BLUETOOTH != 0 ->
+                            svc.setAudioRoute(CallAudioState.ROUTE_BLUETOOTH)
+                        supportedRoutes and CallAudioState.ROUTE_WIRED_HEADSET != 0 ->
+                            svc.setAudioRoute(CallAudioState.ROUTE_WIRED_HEADSET)
+                        else -> svc.setAudioRoute(CallAudioState.ROUTE_EARPIECE)
+                    }
+                    svc.getSystemService(AudioManager::class.java)?.mode = AudioManager.MODE_NORMAL
+                }
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "stopDetection failed", e)
+                false
+            }
+        }
+
         // state.md "Ideas not yet tried" -> "VoLTE vs. legacy circuit-switched
         // call": human-readable network-type name so a logcat grep can tell
         // which call type root cause #1 (silent zero-fill) was reproduced on,
@@ -100,21 +160,20 @@ class InCallServiceImpl : InCallService() {
 
         when (state) {
             Call.STATE_ACTIVE -> {
-                Log.i(TAG, "Call active — starting audio capture")
+                Log.i(TAG, "Call active")
                 logCallAudioDiagnostics(call)
-                // MODE_IN_COMMUNICATION: some OEMs require this for any non-VOICE_CALL
-                // source to keep receiving real samples once the carrier call audio path
-                // takes over. See AudioCaptureManager's docstring.
-                val am = getSystemService(AudioManager::class.java)
-                am?.mode = AudioManager.MODE_IN_COMMUNICATION
-                // Route via Telecom, not AudioManager directly (see setSpeakerphone doc) —
-                // without speaker, the far end's voice never physically reaches the mic.
-                setSpeakerphone(true)
-                AudioCaptureManager.start(this)
+                // No forced routing and no auto-started capture here — detection is
+                // opt-in (see startDetection/stopDetection). A plain call is left
+                // alone so Telecom's own default routing (including auto-selecting
+                // an already-connected BT/wired headset) behaves normally.
             }
             Call.STATE_DISCONNECTED, Call.STATE_DISCONNECTING -> {
-                Log.i(TAG, "Call disconnected — stopping audio capture")
-                AudioCaptureManager.stop()
+                Log.i(TAG, "Call disconnected")
+                if (detectionActive) {
+                    Log.i(TAG, "Detection was active — stopping audio capture")
+                    AudioCaptureManager.stop()
+                    detectionActive = false
+                }
                 val am = getSystemService(AudioManager::class.java)
                 am?.mode = AudioManager.MODE_NORMAL
                 if (activeCall == call) {

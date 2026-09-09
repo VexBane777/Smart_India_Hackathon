@@ -27,30 +27,59 @@ more creatively than the standard playbook — including inventing our own
 undocumented approaches if the documented ones run out. See "Ideas not yet
 tried" below; add to it rather than letting a session end with a shrug.
 
-## Immediate to-dos (next session, in priority order)
+## Immediate to-dos / test checklist (next session, in priority order)
 
-Phone (CPH2613) is connected via USB as of this session. All three items
-below are code-complete and build-clean but **none verified on-device
-yet** — do all three in one on-device pass before writing new findings,
-since they interact (external-mic routing changes what clamp #2's Live
-Mic Test looks like; the VoLTE diagnostic log is most useful captured
-alongside a real-call repro of #1):
+Phone (CPH2613) is connected via USB as of this session; `app-privileged-
+release.apk` built from commit `55b6e1f` is installed and launched
+(`lastUpdateTime` 2026-09-09 14:51). `BLUETOOTH_CONNECT` is **not**
+granted yet — `adb pm grant` hit the same shell restriction seen earlier
+for `CAPTURE_AUDIO_OUTPUT`; grant it manually via Settings → Apps →
+VoiceGuard → Permissions → Nearby devices before test 2b.
 
-- **Verify `preferExternalInputDevice()` (commit pending, this session)**:
-  plug in wired earphones (inline mic), place/receive a real call, confirm
-  via `adb logcat -s AudioCaptureManager` that `preferExternalInputDevice:
-  setPreferredDevice(...)` logs the wired device and `chunkRms` stays
-  non-zero where it was previously silent. Then repeat with the Bluetooth
-  headset (watch for the `Requested Bluetooth SCO` log line too — BT SCO
-  negotiation can take a second or two before audio actually flows).
-- **Verify `logCallAudioDiagnostics()`**: same real call, check logcat for
-  `Call audio diagnostics: networkType=...` — confirms whether the call
-  that reproduces (or doesn't reproduce) root cause #1 was VoLTE/NR or a
-  CS fallback, without needing a second tool.
-- **Verify the AEC-disable change (`ae11c20`, already implemented)**
-  actually changes clamp #2's behavior: Live Mic Test, phone's own speaker
-  → own mic, watch for the ~7-11s clamp-to-noise-floor signature — see
-  root cause #2 below.
+Do these in one on-device pass, in this order (each `adb logcat` filter
+given so results can be pulled without guessing what to grep for):
+
+1. **Clamp #2 / AEC-disable verification** (`ae11c20`, already implemented,
+   still unverified). Live Mic Test screen, phone's own speaker playing
+   audio into its own mic (no call needed). Watch for the previously-seen
+   ~7-11s clamp to noise floor (`-inf` dB then permanent ~-37dB) — if it's
+   gone/reduced, the AEC-disable fix worked.
+   `adb logcat -s AudioCaptureManager` — look for `AcousticEchoCanceler
+   disabled for session ...` at start, then judge by ear/RMS whether the
+   clamp still happens.
+2. **External-mic preference** (`preferExternalInputDevice()`, this
+   session, code-complete/untested):
+   - **2a. Wired earphones (inline mic)**: plug in, place or receive a
+     real call, confirm `preferExternalInputDevice: setPreferredDevice
+     (TYPE_WIRED_HEADSET, ...) -> true` in logcat and that `chunkRms`
+     stays non-zero for the call duration (previously always zero per
+     root cause #1).
+   - **2b. Bluetooth headset**: pair/connect it, same real-call test,
+     confirm `Requested Bluetooth SCO` + `setPreferredDevice
+     (TYPE_BLUETOOTH_SCO, ...) -> true` in logcat, and check `chunkRms`
+     — note BT SCO negotiation can take 1-2s before real audio starts
+     flowing, don't judge the first couple of chunks.
+   - Filter: `adb logcat -s AudioCaptureManager`
+3. **VoLTE/call-type diagnostics** (`logCallAudioDiagnostics()`, this
+   session): during the same real call(s) from step 2, check for `Call
+   audio diagnostics: networkType=... highDefAudio=... wifiCall=...` at
+   call-active. Record what network type the call(s) that do/don't
+   reproduce root cause #1 were on — this is the data point the "VoLTE vs.
+   legacy circuit-switched call" idea (below) needs, gathered for free
+   alongside steps above rather than as a separate test.
+   Filter: `adb logcat -s InCallServiceImpl`
+4. If 2a/2b show real (non-zero) `chunkRms` during an actual call:
+   **root cause #1 may be resolved or narrowed** — re-read state.md's
+   root-cause section, since that would be new information contradicting
+   "every source gets zero-filled" and needs a rewrite, not just a note.
+   If 2a/2b still show zero: root cause #1 is confirmed *not* scoped to
+   the internal mic, which is itself a useful negative result — record it.
+5. Remaining hardware-only ideas, not part of this pass (no code changes
+   possible, need separate devices/SIMs — see "Ideas not yet tried" for
+   full rationale on each): get a rooted device to test
+   `magisk-privileged-module/`; test on a non-ColorOS device; swap SIM
+   carrier; try VoLTE-vs-legacy explicitly if the diagnostic log in step 3
+   doesn't naturally surface both call types.
 - ~~Try Shizuku~~ — **ruled out, see "Ideas tried and ruled out" below.**
   Shizuku cannot grant `CAPTURE_AUDIO_OUTPUT`; don't re-attempt.
 
