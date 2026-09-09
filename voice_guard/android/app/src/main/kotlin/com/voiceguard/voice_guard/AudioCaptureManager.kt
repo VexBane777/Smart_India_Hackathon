@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -76,6 +77,7 @@ object AudioCaptureManager {
     )
 
     private var recorder: AudioRecord? = null
+    private var aec: AcousticEchoCanceler? = null
     private var thread: Thread? = null
     @Volatile private var running = false
     private var sink: ((ByteArray) -> Unit)? = null
@@ -123,6 +125,33 @@ object AudioCaptureManager {
         return false
     }
 
+    // Idea from state.md "Ideas not yet tried": AcousticEchoCanceler on the winning
+    // source's audio session may be why clamp #2 (own-speaker-into-own-mic loopback
+    // silently dropping to noise floor after ~7-11s, see state.md root cause #2)
+    // happens at all — disabling it is a no-root, per-track alternative to accepting
+    // the clamp. Best-effort only: AcousticEchoCanceler.isAvailable() is false on many
+    // builds, and even where present, disabling it doesn't guarantee it undoes a
+    // HAL-level DSP decision baked into the chipset rather than an effects-framework one.
+    private fun attachAec(audioSessionId: Int?) {
+        if (audioSessionId == null) return
+        try {
+            if (!AcousticEchoCanceler.isAvailable()) {
+                Log.i(TAG, "AcousticEchoCanceler not available on this device")
+                return
+            }
+            val effect = AcousticEchoCanceler.create(audioSessionId)
+            if (effect == null) {
+                Log.w(TAG, "AcousticEchoCanceler.create returned null for session $audioSessionId")
+                return
+            }
+            effect.enabled = false
+            aec = effect
+            Log.i(TAG, "AcousticEchoCanceler disabled for session $audioSessionId")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to disable AcousticEchoCanceler", e)
+        }
+    }
+
     fun start(context: Context, onBytes: ((ByteArray) -> Unit)? = null) {
         if (onBytes != null) {
             sink = onBytes
@@ -153,6 +182,7 @@ object AudioCaptureManager {
         }
 
         recorder?.startRecording()
+        attachAec(recorder?.audioSessionId)
         running = true
         thread = Thread {
             val buf = ByteArray(3200) // 100ms @16kHz mono 16-bit
@@ -210,6 +240,8 @@ object AudioCaptureManager {
         try { recorder?.stop() } catch (_: Exception) {}
         try { recorder?.release() } catch (_: Exception) {}
         recorder = null
+        try { aec?.release() } catch (_: Exception) {}
+        aec = null
         activeSourceName = null
         hasRecentSignal = false
 

@@ -27,6 +27,16 @@ more creatively than the standard playbook — including inventing our own
 undocumented approaches if the documented ones run out. See "Ideas not yet
 tried" below; add to it rather than letting a session end with a shrug.
 
+## Immediate to-dos (next session, in priority order)
+
+- **Try wired earphones (inline mic) and Bluetooth headset as the capture
+  device** during a real call, instead of the phone's internal mic. Zero
+  cost, user already has both on hand. Checks whether the OS/OEM block
+  (#1 below) is scoped to the internal mic specifically. See "Ideas not
+  yet tried" for full rationale.
+- ~~Try Shizuku~~ — **ruled out, see "Ideas tried and ruled out" below.**
+  Shizuku cannot grant `CAPTURE_AUDIO_OUTPUT`; don't re-attempt.
+
 ## What's proven working (2026-09-09 session)
 
 - **New retrained model (`508d637`, full-corpus retrain: ASVspoof2019 LA
@@ -150,6 +160,65 @@ later, they need synthetic stimuli that actually resemble ASVspoof-style
 spoof artifacts, not arbitrary tones — or should be retired in favor of
 bundling a couple of small real WAV clips as fixed assets.
 
+## Ideas tried and ruled out
+
+### Shizuku as a root alternative for `CAPTURE_AUDIO_OUTPUT` — ruled out, 2026-09-09
+
+**Conclusion: structurally impossible, not device-specific. Don't
+re-attempt, and don't bother installing the Shizuku app.**
+
+Tested the "cheap ADB probe" listed as a Shizuku precursor — connected
+CPH2613 via **USB** debugging (wireless debugging pairing was tried first
+and abandoned; see below) and ran:
+
+```
+adb shell pm grant com.voiceguard.voice_guard android.permission.CAPTURE_AUDIO_OUTPUT
+```
+
+Result: `SecurityException: grantRuntimePermission: Neither user 2000 nor
+current process has android.permission.GRANT_RUNTIME_PERMISSIONS` (full
+stack trace in session transcript, `PermissionService.kt` /
+`PackageManagerShellCommand.java`).
+
+**Why this rules out Shizuku, not just this probe:** the exception is
+about `pm grant` itself, not about ColorOS or this device — on stock AOSP,
+shell (UID 2000) is only ever allowed to grant ordinary install-time
+runtime permissions via `pm grant`; `signature|privileged` permissions
+like `CAPTURE_AUDIO_OUTPUT` are categorically excluded from what shell can
+grant, on any Android build. Shizuku's non-root mode runs its service at
+that exact same shell UID (2000) — it is, by design, "whatever `adb shell`
+can do, callable from inside an app." It has no more privilege than the
+`adb shell` command just used, so it hits the identical
+`SecurityException` for the identical reason. Root works instead because
+it either runs as UID 0 (bypasses the permission check outright) or
+installs the app into `/system/priv-app` with an OEM
+privapp-permissions-allowlist XML entry (grants the permission at install
+time, no `pm grant` call involved at all) — neither of which Shizuku can
+do. `magisk-privileged-module/` still needs actual root; there is no
+lower-effort substitute for it.
+
+(Aside: whatever mechanism BCR's docs describe Shizuku enabling, it isn't
+a `pm grant` of `CAPTURE_AUDIO_OUTPUT` — either BCR uses Shizuku for a
+different, non-privileged capture path, or its Shizuku support assumes an
+OEM/Android version where shell has been added to that permission's
+allowlist, which is not the case on this CPH2613/ColorOS build. Not
+investigated further since it doesn't unblock this project either way.)
+
+**Wireless debugging pairing was tried first and abandoned for unrelated
+network reasons** (kept for completeness, not a finding about Shizuku
+itself): the phone was hotspotting mobile data to the PC, so wireless
+debugging bound to the phone's mobile-data IP rather than the hotspot
+interface actually reachable from the PC (`Test-NetConnection` timed out
+on both TCP and ICMP). Retried on a shared Wi-Fi network
+(`SVKMGRP.COM`, a campus/institutional network) and still failed — likely
+AP client isolation blocking device-to-device traffic on that network
+(ping and TCP both failed to the phone's IP even though both devices were
+on the same SSID). Switched to a USB cable, which worked immediately
+(`adb devices` saw the device on the first try). **If wireless debugging
+is needed again for something else, use a network known not to isolate
+clients (e.g. the phone's own hotspot, PC connecting to phone — not phone
+hotspotting to PC) — USB is the reliable fallback if in doubt.**
+
 ## Ideas not yet tried (add to this, don't just leave it stale)
 
 Goal: get real, unblocked audio into the detection pipeline during an
@@ -186,7 +255,40 @@ by how soon they're actionable:
 - **Bluetooth/wired external mic as the capture device** instead of the
   phone's internal mic, on the theory that OEM anti-recording heuristics
   might be scoped to the internal mic specifically. Untested — worth a
-  quick check since it's low effort.
+  quick check since it's low effort. User has wired earphones (inline mic)
+  and a Bluetooth headset on hand to try this with, zero cost.
+- ~~Shizuku instead of full root~~ — **ruled out, 2026-09-09, see "Ideas
+  tried and ruled out."**
+- **Swap the SIM to a different carrier** in the same test device, to
+  isolate whether block #1 is carrier-config-driven (India 2024+
+  call-recording rules surfaced via `CarrierConfigManager`) vs.
+  OEM/ColorOS policy independent of carrier. Zero hardware cost if a
+  second SIM is available.
+- **VoLTE vs. legacy circuit-switched call**, if the SIM/network still
+  supports falling back to a non-VoLTE call — tests whether the block is
+  specific to the IMS/VoLTE audio path (more carrier plumbing, more DRM
+  hooks) or applies uniformly regardless of call type.
+- **Test whether clamp #2 (the acoustic anti-loopback clamp, see below)
+  also fires during a real call's acoustic fallback**, not just Live Mic
+  Test self-testing. Force speakerphone during an actual live call and
+  watch for the same ~7-11s-then-clamp signature. Not yet tested — if it
+  reproduces on a real call, the acoustic-fallback tier (forced
+  speakerphone + MIC, what most non-root call-recorder apps rely on) is a
+  second, independent failure mode stacked on top of #1, not merely a
+  self-test artifact. Matters a lot for how much effort the fallback tier
+  deserves vs. going all-in on privileged capture.
+- ~~Explicitly disable AEC at the AudioEffect level~~ — **implemented,
+  2026-09-09, untested on-device.** `AudioCaptureManager.kt` now calls
+  `attachAec()` right after `recorder.startRecording()`: creates an
+  `AcousticEchoCanceler` on the winning source's `audioSessionId` (guarded
+  by `isAvailable()`, all best-effort/try-catch since availability and
+  effect actually being honored are both device-dependent) and
+  `setEnabled(false)`s it; releases it in `stop()` alongside the recorder.
+  Builds clean (`flutter build apk --flavor privileged --release`, exit 0,
+  `app-privileged-release.apk`). **Not yet verified to actually change
+  clamp #2's behavior** — that needs a real Live Mic Test run on-device
+  (phone's own speaker → own mic, watch whether the ~7-11s clamp to noise
+  floor still happens). Do that check before crediting this as a fix.
 - Stay open to genuinely new, undocumented approaches if the above don't
   pan out — this file exists partly so an idea tried and abandoned doesn't
   get silently retried next session, and so a genuinely new idea gets
