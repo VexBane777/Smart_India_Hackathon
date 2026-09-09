@@ -301,6 +301,12 @@ by how soon they're actionable:
 - Committed `efdfdbe`: gradle.properties memory fix + the untracked
   privileged-VoIP-capture research spike doc (was sitting uncommitted from
   a prior session). Pushed to `origin/vaani`.
+- Committed `ae11c20`: finished the AEC-disable idea (see "Ideas not yet
+  tried") — `AudioCaptureManager.kt` now creates and disables an
+  `AcousticEchoCanceler` on the winning capture source's session, released
+  in `stop()`. Verified via a clean `flutter build apk --flavor privileged
+  --release` (exit 0); not yet verified on-device against clamp #2's
+  actual behavior. Pushed to `origin/vaani`.
 - Cleaned up a stray 596MB `android/java_pid7812.hprof` heap-dump artifact
   left by the Gradle daemon OOM crash (not committed, was git-ignored
   anyway, just disk clutter).
