@@ -36,7 +36,7 @@ import sys
 
 import soundfile as sf
 
-from accent_common import ensure_dirs, cell_dir, manifest_writer_append
+from accent_common import ACCENTS_ROOT, ensure_dirs, cell_dir, manifest_writer_append
 
 COMMON_VOICE_DATASET = "mozilla-foundation/common_voice_17_0"
 
@@ -111,7 +111,12 @@ def main() -> None:
         sf.write(out_path, audio["array"], audio["sampling_rate"])
         duration_s = len(audio["array"]) / audio["sampling_rate"]
         rows.append({
-            "file": str(out_path.relative_to(cell_dir("real", cell).parent.parent)),
+            # relative to data/ (ACCENTS_ROOT.parent), matching every other
+            # script's convention (ingest_self_recordings.py,
+            # gen_accents_fake.py) — NOT relative to ACCENTS_ROOT itself,
+            # which would drop the "accents/" prefix and break every
+            # downstream lookup of this file.
+            "file": str(out_path.relative_to(ACCENTS_ROOT.parent)),
             "label": "real",
             "cell": cell,
             "source": "common_voice_17_0",

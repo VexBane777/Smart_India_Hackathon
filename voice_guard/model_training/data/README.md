@@ -70,6 +70,50 @@ manifest is not, and is the intended durable record of what's been collected.
    verified to have usable licenses/format — check before bulk-downloading):
    OpenSLR's Hindi corpora, IIT Madras IndicTTS, VCTK (accented English).
 
+5. **`split_accents.py`** — no network/GPU needed. Speaker-disjoint
+   train/held split per cell (same rationale as `prep_in_the_wild.py`: fold
+   everything into training and there's nothing left to measure "does it
+   generalize" with). A cloned clip inherits its source speaker's id, so a
+   real/clone pair never splits across train/held.
+   ```
+   python split_accents.py --held-out-fraction 0.2
+   ```
+   Produces `data/accents_split/{train,held}/{real,fake}/<cell>/`. Run
+   `report_accent_coverage.py` first — a cell with only one speaker (e.g.
+   early on, `en_native` with just your own recordings) goes entirely to
+   `train` rather than losing its only speaker to `held`.
+
+6. **`../eval_accent_cells.py`** (repo root, not in `data/`) — per-cell EER
+   against `accents_split/held/`, instead of one aggregate number that can't
+   tell you *which* cell (e.g. `hi_foreign`) a model is still weak on:
+   ```
+   python ../eval_accent_cells.py --model runs/voice_guard_v3/model.pt
+   ```
+
+### Folding into training
+
+Once `data/accents_split/train/` has real content, add it to `train.py` as
+additional clean (undegraded) dirs — no code change needed, `--real-clean`/
+`--fake-clean` already accept multiple directories:
+
+```
+python train.py --real data/real --fake data/fake \
+    --real-clean data/real2021 data/real_itw_train \
+        data/accents_split/train/real/en_native data/accents_split/train/real/en_foreign \
+        data/accents_split/train/real/hi_native data/accents_split/train/real/hi_foreign \
+    --fake-clean data/fake2021 data/fake_itw_train \
+        data/accents_split/train/fake/en_native data/accents_split/train/fake/en_foreign \
+        data/accents_split/train/fake/hi_native data/accents_split/train/fake/hi_foreign \
+    --out runs/voice_guard_v4 --epochs 30 --channel whatsapp volte --device auto --workers 8
+```
+
+Accent cells go in `--*-clean` (no `--channel` degradation) alongside
+ASVspoof2021/In-the-Wild, on the same reasoning already documented for
+those: Common Voice clips, self-recordings, and XTTS clones are either
+already realistic (your own live-mic recordings) or not meaningfully more
+realistic after a synthetic channel pass (Common Voice/XTTS studio-ish
+audio) — revisit this if `eval_accent_cells.py` shows it mattered.
+
 ## Known caveats
 
 - "native"/"foreign" is a coarse proxy from Common Voice's self-reported
@@ -83,6 +127,8 @@ manifest is not, and is the intended durable record of what's been collected.
   a starting guess, not derived from an experiment — revisit once the next
   subsystem (training-pipeline extension) shows what actually moves held-out
   EER per cell.
-- None of this is wired into `train.py` yet — that's the next subsystem
-  (folding `data/accents/` into `dataset.py`'s real/fake inputs), out of
-  scope for this data-collection pass.
+- `split_accents.py`/`eval_accent_cells.py` and the `train.py` invocation
+  above are smoke-tested (synthetic multi-speaker WAVs, verified the
+  speaker-disjoint split and per-cell EER report both work mechanically) but
+  not run against real accent data yet — that still needs steps 1-4 actually
+  executed on the GPU machine first.
