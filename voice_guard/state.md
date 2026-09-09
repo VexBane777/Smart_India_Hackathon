@@ -9,8 +9,10 @@ that changed status, findings, or plans — see `CLAUDE.md` at the repo root.
 **We are close to real-time on-device AI-voice detection working end to
 end on Android — not there yet on real phone calls specifically, but the
 full pipeline (capture → LFCC/prosody feature extraction → the real
-retrained TFLite model → EMA/alert-gating → UI) is proven correct and
-working on real audio right now, today, via the Live Mic Test path.**
+retrained model, now served via ONNX Runtime instead of TFLite (see
+"Accent/clone data pipeline + ONNX swap" below) → EMA/alert-gating → UI) is
+proven correct and working on real audio right now, today, via the Live
+Mic Test path.**
 
 Do not read "blocked on real calls" as "the project doesn't work." Two
 distinct things are true at once:
@@ -28,6 +30,19 @@ undocumented approaches if the documented ones run out. See "Ideas not yet
 tried" below; add to it rather than letting a session end with a shrug.
 
 ## Immediate to-dos / test checklist (next session, in priority order)
+
+0. **Verify the ONNX Runtime swap on-device** (`969fd7e`, this session —
+   see "Accent/clone data pipeline + ONNX swap" below). Confirmed via
+   `flutter analyze` (clean), `flutter build apk --flavor privileged
+   --debug` (succeeds), and a Python-side numeric parity check
+   (re-exported `model.onnx` vs. the deployed `model.pt`, ~5e-4 max diff,
+   expected float tolerance) — but the phone's adb connection dropped
+   mid-session before a real Live Mic Test could confirm the model
+   actually loads and scores at runtime. Do this first, before trusting
+   the ONNX path in the field: install `app-privileged-debug.apk`, run
+   Live Mic Test, check `adb logcat` for `ONNX model loaded from
+   assets/models/voice_detector.onnx` (not the "ONNX model not found"
+   fallback line), and confirm the risk meter still fluctuates sensibly.
 
 Phone (CPH2613) is connected via USB as of this session; `app-privileged-
 release.apk` built from commit `55b6e1f` is installed and launched
@@ -359,6 +374,73 @@ by how soon they're actionable:
   get silently retried next session, and so a genuinely new idea gets
   written down here instead of living only in a chat transcript.
 
+## Accent/clone data pipeline + ONNX swap (2026-09-09 session)
+
+Triggered by a real false-positive finding earlier this session: live,
+genuine self-speech scored 80-100% "AI" via Live Mic Test whenever ambient
+noise was present, ~0-20% when quiet. Root cause (reasoned from
+`model_training/README.md`'s own admitted gap, not fully proven): the
+deployed model was trained on ASVspoof (studio-quality) + In-the-Wild
+(real-world but pre-recorded) audio, never evaluated against raw live-mic
+capture with real room noise — and `VOICE_RECOGNITION` (the winning
+capture source) deliberately runs with AGC/noise-suppression off, so two
+of the three model features (`energyVariance`, `zcrVariance`) see
+real-world noise the training data mostly didn't.
+
+**Data-collection subsystem** (`model_training/data/`, commits `ad57406`,
+`2d55cd3`) — scaffolding for an 8-cell `{en,hi} x {native,foreign} x
+{real,fake}` corpus to close both the noise gap and an accent-coverage gap
+(target: broad foreign-English-accent and Indian-Hindi-accent coverage).
+`prep_accents_real.py` (Common Voice downloader/bucketer) and
+`gen_accents_fake.py` (XTTS-v2 local voice cloning) are **written and
+documented but not run** — no GPU/`datasets`/`TTS` on the machine this was
+built on; `data/README.md` has the exact commands/links/license notes for
+whoever runs it on the GPU machine next. `ingest_self_recordings.py`,
+`report_accent_coverage.py`, `split_accents.py` (speaker-disjoint
+train/held split), and `eval_accent_cells.py` (per-cell EER) need no
+network/GPU and **are** smoke-tested (synthetic multi-speaker WAVs) — found
+and fixed a real path bug in `prep_accents_real.py` this way (manifest
+paths were relative to the wrong base dir, would have made every pulled
+file unfindable). Next actual step: run steps 1-4 in `data/README.md` on
+the GPU machine, then `report_accent_coverage.py` to see what's still thin
+and needs manual supplementing, then fold `accents_split/train/` into a
+retrain per the README's documented `train.py` invocation.
+
+**ONNX Runtime swap** (commit `969fd7e`) — replaced `tflite_flutter` with
+`flutter_onnxruntime`; app now loads `assets/models/voice_detector.onnx`
+directly instead of a `.tflite` converted via `export_tflite.py` (that
+script is kept but no longer the recommended path). `model.onnx` itself
+wasn't actually on disk (only `model.pt` and the old `.tflite`) — re-exported
+it from `model.pt` and confirmed numeric parity (~5e-4 max diff) before
+shipping. `infer()`/`scoreChunk()` became `async` (ONNX Runtime's API is
+Future-based), rippling into `TFLiteServiceBase`, the web stub, and
+`audio_service.dart`'s two call sites. Root `.gitignore`'s blanket
+`*.onnx` rule got an explicit exception for just this one shipped asset.
+Verified: `flutter analyze` clean, debug APK builds. **Not yet verified
+on-device** — see "Immediate to-dos" item 0 above.
+
+**LCNN backup — spike result, decision: not adopting now.** Investigated
+whether a pretrained LCNN (the ASVspoof-era light-CNN architecture) could
+serve as a more "reliable, less experimental" backup model. Findings: a
+real pretrained checkpoint exists
+([nii-yamagishilab/project-NN-Pytorch-scripts](https://github.com/nii-yamagishilab/project-NN-Pytorch-scripts),
+BSD-3-Clause, trained on ASVspoof2019 LA) — but it's architecturally a
+different kind of model than ours: frame-level LFCC through a CNN +
+bidirectional LSTM + global-average-pooling, vs. our tiny MLP over one
+mean-pooled 63-float vector. Adopting it would mean building a second,
+frame-sequence feature-extraction path in `audio_processor.dart` (doesn't
+exist today), building our own ONNX export/mobile deployment (the repo has
+neither), and "moderate" fine-tuning work in an unfamiliar codebase (their
+own toy example says protocol-file prep + code edits are needed for a
+custom dataset) — all while *not* sidestepping the same real-world
+noise/domain-shift problem the accent-data pipeline above already exists
+to fix, since LCNN's pretrained weights come from the same ASVspoof-era
+data ours does. **Decision: revisit only if, after fine-tuning the current
+MLP on the new accent/noise data, `eval_accent_cells.py` still shows it's
+not enough** — at that point LCNN's extra temporal capacity might
+genuinely earn its much larger integration cost. Don't re-litigate this
+research from scratch next session; this paragraph is the record of why.
+
 ## Housekeeping done this session
 
 - Merged `origin/vaani`'s 3 new commits (full-corpus retrain + docs) with
@@ -380,6 +462,14 @@ by how soon they're actionable:
   session's transcript for the exact WAV analysis if ever needed again;
   not preserved as repo artifacts, they were device-local debug recordings
   only).
+- Committed and pushed to `origin/vaani`, same session, continued from
+  above: `ad57406` (accent/clone data-collection scaffolding),
+  `955d7fd` (opt-in call detection — `InCallServiceImpl`/`MainActivity`/
+  `call_screen.dart`, previously uncommitted from earlier work),
+  `2d55cd3` (speaker-disjoint accent split + per-cell EER eval, plus the
+  `prep_accents_real.py` path-bug fix), `969fd7e` (ONNX Runtime swap,
+  replacing `tflite_flutter`). See "Accent/clone data pipeline + ONNX
+  swap" above for the full rationale on the last two.
 
 ## How to keep this file useful
 
