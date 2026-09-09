@@ -74,7 +74,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Row(children: [Icon(Icons.lock, size: 16, color: AppColors.verified), SizedBox(width: 6), Text('Privacy-First Design', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.verified))]),
             const SizedBox(height: 6),
-            Text('• Raw PCM is processed in RAM and discarded — never written to disk.\n• Only {timestamp, caller, riskScore, verdict} is stored locally.\n• Inference runs on-device (TFLite); backend receives LFCC features only, not raw audio.\n• DPDP Act–aligned data minimization; no audio retention.',
+            Text('• Raw PCM is processed in RAM and discarded — never written to disk.\n• Only {timestamp, caller, riskScore, verdict} is stored locally.\n• Inference runs on-device (ONNX Runtime); backend receives LFCC features only, not raw audio.\n• DPDP Act–aligned data minimization; no audio retention.',
                 style: TextStyle(fontSize: 11, color: Colors.black.withValues(alpha: 0.7), height: 1.4)),
           ]),
         ),

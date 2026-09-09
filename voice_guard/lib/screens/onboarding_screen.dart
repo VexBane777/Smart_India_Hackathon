@@ -29,7 +29,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 _slide(icon: Icons.shield_rounded, color: AppColors.primary, title: 'Stop Voice Cloning\nFraud in Real Time',
                     body: 'Generative AI can clone a voice from seconds of audio. ${AppConstants.appName} detects synthetic speech during live calls and warns you before you act.'),
                 _slide(icon: Icons.graphic_eq, color: AppColors.verified, title: 'How it works',
-                    body: '16 kHz audio → 60 LFCC features (linear filterbank preserves synthesis artifacts) + prosody (pause/pitch variance) → on-device TFLite model → risk score 0–100% with smoothing. Raw PCM never leaves RAM.'),
+                    body: '16 kHz audio → 60 LFCC features (linear filterbank preserves synthesis artifacts) + prosody (pause/pitch variance) → on-device ONNX Runtime model → risk score 0–100% with smoothing. Raw PCM never leaves RAM.'),
                 _slide(icon: Icons.lock_rounded, color: AppColors.suspicious, title: 'Privacy-first & compliant',
                     body: 'No raw audio is stored. Only {timestamp, caller, risk, verdict} is logged. Inference is on-device; the /v1/analyze-chunk API accepts features only. DPDP Act aligned.'),
                 _permissionsSlide(),

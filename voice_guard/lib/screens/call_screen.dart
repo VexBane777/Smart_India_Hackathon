@@ -633,7 +633,7 @@ class _CallScreenState extends State<CallScreen> {
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 8),
-              Text('Vaani will monitor audio via on-device TFLite',
+              Text('Vaani will monitor audio via on-device ONNX Runtime',
                   style: TextStyle(fontSize: 12, color: Colors.black.withValues(alpha: 0.5))),
             ]),
           ),

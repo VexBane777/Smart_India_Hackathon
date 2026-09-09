@@ -31,18 +31,19 @@ tried" below; add to it rather than letting a session end with a shrug.
 
 ## Immediate to-dos / test checklist (next session, in priority order)
 
-0. **Verify the ONNX Runtime swap on-device** (`969fd7e`, this session —
-   see "Accent/clone data pipeline + ONNX swap" below). Confirmed via
-   `flutter analyze` (clean), `flutter build apk --flavor privileged
-   --debug` (succeeds), and a Python-side numeric parity check
-   (re-exported `model.onnx` vs. the deployed `model.pt`, ~5e-4 max diff,
-   expected float tolerance) — but the phone's adb connection dropped
-   mid-session before a real Live Mic Test could confirm the model
-   actually loads and scores at runtime. Do this first, before trusting
-   the ONNX path in the field: install `app-privileged-debug.apk`, run
-   Live Mic Test, check `adb logcat` for `ONNX model loaded from
-   assets/models/voice_detector.onnx` (not the "ONNX model not found"
-   fallback line), and confirm the risk meter still fluctuates sensibly.
+~~0. Verify the ONNX Runtime swap on-device~~ — **done, 2026-09-09, same
+   session.** Phone reconnected; installed `app-privileged-debug.apk` (from
+   `969fd7e`), ran Live Mic Test, `adb logcat` confirmed `ONNX model loaded
+   from assets/models/voice_detector.onnx` (native `libonnxruntime4j_jni.so`
+   loaded first), and live scoring worked correctly end to end — `Monitor:
+   raw=...` values fluctuated realistically (0.064 quiet → 0.999 during
+   speech), EMA/alert-gating fired as designed (`ALERT fired`), no `ONNX
+   inference failed` errors. The ONNX swap is now fully verified, not just
+   built. Also fixed leftover "TFLite" user-facing strings found while in
+   the app (`call_screen.dart`, `onboarding_screen.dart`,
+   `logs_screen.dart`, `settings_screen.dart` — cosmetic only, code
+   identifiers like `tflite_service.dart`/`TFLiteService` deliberately kept
+   as-is, see "Accent/clone data pipeline + ONNX swap" below).
 
 Phone (CPH2613) is connected via USB as of this session; `app-privileged-
 release.apk` built from commit `55b6e1f` is installed and launched
@@ -416,8 +417,10 @@ shipping. `infer()`/`scoreChunk()` became `async` (ONNX Runtime's API is
 Future-based), rippling into `TFLiteServiceBase`, the web stub, and
 `audio_service.dart`'s two call sites. Root `.gitignore`'s blanket
 `*.onnx` rule got an explicit exception for just this one shipped asset.
-Verified: `flutter analyze` clean, debug APK builds. **Not yet verified
-on-device** — see "Immediate to-dos" item 0 above.
+Verified: `flutter analyze` clean, debug APK builds, **and confirmed
+on-device** (same session, once the phone reconnected) — model loads,
+scores fluctuate correctly on real live-mic audio, alerts fire as
+designed. See item 0 (now struck through) in "Immediate to-dos" above.
 
 **LCNN backup — spike result, decision: not adopting now.** Investigated
 whether a pretrained LCNN (the ASVspoof-era light-CNN architecture) could

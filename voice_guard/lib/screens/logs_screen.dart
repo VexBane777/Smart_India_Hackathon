@@ -37,7 +37,7 @@ class LogsScreen extends StatelessWidget {
                 Text('No recorded calls yet',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.black.withValues(alpha: 0.6))),
                 const SizedBox(height: 4),
-                Text('Real calls and live acoustic scans are recorded to disk\nas standard WAV files and evaluated via TFLite.',
+                Text('Real calls and live acoustic scans are recorded to disk\nas standard WAV files and evaluated via ONNX Runtime.',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 11, color: Colors.black.withValues(alpha: 0.5), height: 1.4)),
                 if (Navigator.canPop(context)) ...[
