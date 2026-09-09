@@ -10,6 +10,12 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.USE_SIP" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- For preferring a wired/BT external mic as the capture device and
+         starting BT SCO to route input through it — see AudioCaptureManager
+         .preferExternalInputDevice(), state.md "Ideas not yet tried" ->
+         "Bluetooth/wired external mic as the capture device". -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <application
         android:label="Vaani"

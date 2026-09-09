@@ -1,7 +1,9 @@
 package com.voiceguard.voice_guard
 
 import android.content.Context
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
@@ -104,7 +106,66 @@ object AudioCaptureManager {
     private var recordingStream: FileOutputStream? = null
     private var totalBytesRecorded = 0L
 
+    private var scoAudioManager: AudioManager? = null
+    private var scoStarted = false
+    var preferredInputDeviceName: String? = null
+        private set
+
     fun setSink(s: ((ByteArray) -> Unit)?) { sink = s }
+
+    // Idea from state.md "Ideas not yet tried" -> "Bluetooth/wired external mic
+    // as the capture device": the OEM anti-recording/zero-fill behavior (root
+    // cause #1) and the acoustic anti-loopback clamp (#2) are both hypothesized
+    // to be scoped to the phone's *internal* mic specifically. AudioRecord does
+    // not automatically prefer an external mic just because one is plugged in —
+    // by default it stays on whatever the audio-policy default-routing picked,
+    // which is not guaranteed to be the external device even when connected.
+    // This makes that preference explicit instead of hoping the OS routes there.
+    // Best-effort only, matching attachAec(): every step is try/catch'd because
+    // availability of a given device/BT SCO is itself device- and OEM-dependent.
+    private fun preferExternalInputDevice(context: Context) {
+        preferredInputDeviceName = null
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+            val inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            // Priority: wired beats BT SCO (no pairing/negotiation latency or
+            // codec-quality loss), USB headset counts as "wired" here too.
+            val wired = inputs.firstOrNull {
+                it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_USB_HEADSET
+            }
+            val bluetoothSco = inputs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+
+            val chosen = wired ?: bluetoothSco
+            if (chosen == null) {
+                Log.i(TAG, "preferExternalInputDevice: no wired/BT external input device present, using default routing")
+                return
+            }
+
+            if (chosen === bluetoothSco) {
+                // BT SCO input is not "live" merely because the device is paired —
+                // it must be explicitly requested, or the input stays on the phone
+                // mic regardless of setPreferredDevice(). Starting SCO here (rather
+                // than waiting on caller code) keeps this self-contained so the
+                // capture path itself is responsible for actually reaching the
+                // device it prefers, not just naming it.
+                try {
+                    am.startBluetoothSco()
+                    am.isBluetoothScoOn = true
+                    scoAudioManager = am
+                    scoStarted = true
+                    Log.i(TAG, "Requested Bluetooth SCO for external mic capture")
+                } catch (e: Exception) {
+                    Log.w(TAG, "startBluetoothSco failed", e)
+                }
+            }
+
+            val ok = recorder?.setPreferredDevice(chosen) ?: false
+            preferredInputDeviceName = "${chosen.type}:${chosen.productName}"
+            Log.i(TAG, "preferExternalInputDevice: setPreferredDevice(${chosen.type}, ${chosen.productName}) -> $ok")
+        } catch (e: Exception) {
+            Log.w(TAG, "preferExternalInputDevice failed", e)
+        }
+    }
 
     private fun openRecorder(bufSize: Int): Boolean {
         for ((name, source) in SOURCE_CASCADE) {
@@ -181,6 +242,7 @@ object AudioCaptureManager {
             Log.e(TAG, "Failed to initialize call recording file", e)
         }
 
+        preferExternalInputDevice(context)
         recorder?.startRecording()
         attachAec(recorder?.audioSessionId)
         running = true
@@ -242,6 +304,15 @@ object AudioCaptureManager {
         recorder = null
         try { aec?.release() } catch (_: Exception) {}
         aec = null
+        if (scoStarted) {
+            try {
+                scoAudioManager?.isBluetoothScoOn = false
+                scoAudioManager?.stopBluetoothSco()
+            } catch (_: Exception) {}
+            scoStarted = false
+            scoAudioManager = null
+        }
+        preferredInputDeviceName = null
         activeSourceName = null
         hasRecentSignal = false
 

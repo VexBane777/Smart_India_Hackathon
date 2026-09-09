@@ -29,11 +29,28 @@ tried" below; add to it rather than letting a session end with a shrug.
 
 ## Immediate to-dos (next session, in priority order)
 
-- **Try wired earphones (inline mic) and Bluetooth headset as the capture
-  device** during a real call, instead of the phone's internal mic. Zero
-  cost, user already has both on hand. Checks whether the OS/OEM block
-  (#1 below) is scoped to the internal mic specifically. See "Ideas not
-  yet tried" for full rationale.
+Phone (CPH2613) is connected via USB as of this session. All three items
+below are code-complete and build-clean but **none verified on-device
+yet** — do all three in one on-device pass before writing new findings,
+since they interact (external-mic routing changes what clamp #2's Live
+Mic Test looks like; the VoLTE diagnostic log is most useful captured
+alongside a real-call repro of #1):
+
+- **Verify `preferExternalInputDevice()` (commit pending, this session)**:
+  plug in wired earphones (inline mic), place/receive a real call, confirm
+  via `adb logcat -s AudioCaptureManager` that `preferExternalInputDevice:
+  setPreferredDevice(...)` logs the wired device and `chunkRms` stays
+  non-zero where it was previously silent. Then repeat with the Bluetooth
+  headset (watch for the `Requested Bluetooth SCO` log line too — BT SCO
+  negotiation can take a second or two before audio actually flows).
+- **Verify `logCallAudioDiagnostics()`**: same real call, check logcat for
+  `Call audio diagnostics: networkType=...` — confirms whether the call
+  that reproduces (or doesn't reproduce) root cause #1 was VoLTE/NR or a
+  CS fallback, without needing a second tool.
+- **Verify the AEC-disable change (`ae11c20`, already implemented)**
+  actually changes clamp #2's behavior: Live Mic Test, phone's own speaker
+  → own mic, watch for the ~7-11s clamp-to-noise-floor signature — see
+  root cause #2 below.
 - ~~Try Shizuku~~ — **ruled out, see "Ideas tried and ruled out" below.**
   Shizuku cannot grant `CAPTURE_AUDIO_OUTPUT`; don't re-attempt.
 
@@ -236,27 +253,40 @@ by how soon they're actionable:
   narrower than we think, the "acoustic fallback" story is much better on
   other hardware than this one test device suggests — don't let one
   device's behavior stand in for "Android in general."
-- **`voice_guard/docs/superpowers/plans/2026-09-08-voice-guard-privileged-voip-capture-research-spike.md`**
-  (committed this session) already investigated a *system-level* Zygisk
-  bypass of `AudioPlaybackCaptureConfiguration`'s
-  `USAGE_VOICE_COMMUNICATION` exclusion, for VoIP apps generically instead
-  of per-app reverse-engineering. Findings-only so far, no code shipped —
-  worth a follow-up spike to see if the same class of system-level hook
-  could also help with the native telephony-call restriction (#1), not
-  just VoIP apps.
-- **Look for a completely different capture point that isn't
-  microphone-shaped at all**: e.g. Android's `AudioPlaybackCapture` API
-  (API 29+, `MediaProjection`-based) for apps that don't set
-  `USAGE_VOICE_COMMUNICATION` — already partially built
-  (`PlaybackCaptureService.dart`, `AudioPlaybackCapture` manager per commit
-  history) for the VoIP-app angle (WhatsApp/Zoom/Telegram/Meet). Revisit
-  whether any part of that mechanism, or a variant of it, has any
-  applicability to the native dialer/telephony path too.
-- **Bluetooth/wired external mic as the capture device** instead of the
-  phone's internal mic, on the theory that OEM anti-recording heuristics
-  might be scoped to the internal mic specifically. Untested — worth a
-  quick check since it's low effort. User has wired earphones (inline mic)
-  and a Bluetooth headset on hand to try this with, zero cost.
+- ~~`voice_guard/docs/superpowers/plans/2026-09-08-voice-guard-privileged-voip-capture-research-spike.md`
+  follow-up: does the same Zygisk-can't-reach-`audioserver` finding also
+  rule out a system-level bypass for the native telephony restriction
+  (#1), not just VoIP apps?~~ — **ruled out, 2026-09-09, no hardware
+  needed.** Added as a new section in that doc: `audioserver` is started
+  by `init`, never zygote-forked, so Zygisk has no attachment surface
+  regardless of which policy check inside it (VoIP usage-tag or telephony
+  mic-block) is the target. Same non-viable conclusion, and actually a
+  stronger no for telephony since bypassing it defeats an intentional
+  carrier/OEM privacy restriction rather than a generic platform default.
+- ~~Look for a completely different capture point that isn't
+  microphone-shaped at all: does `AudioPlaybackCapture`
+  (`PlaybackCaptureManager.kt`) have any applicability to the native
+  dialer/telephony path, not just VoIP apps?~~ — **ruled out, 2026-09-09,
+  no hardware needed.** Documented in `PlaybackCaptureManager.kt`'s
+  docstring: native cellular call audio is rendered by the telephony
+  HAL/modem directly, never as an app-owned `AudioTrack` playback session,
+  so there is no session for `AudioPlaybackCaptureConfiguration` to attach
+  to at all — categorically out of scope, independent of the
+  already-known `USAGE_VOICE_COMMUNICATION` exclusion.
+- **Bluetooth/wired external mic as the capture device** — **code-complete
+  this session, not yet verified on-device.**
+  `AudioCaptureManager.preferExternalInputDevice()` now explicitly queries
+  `AudioManager.getDevices(GET_DEVICES_INPUTS)` for a wired/USB headset or
+  BT SCO device and calls `AudioRecord.setPreferredDevice()` on it (BT SCO
+  is also explicitly started via `startBluetoothSco()`, since a paired BT
+  mic doesn't get live input just from being connected — SCO must be
+  requested). Previously this idea was untested because the app never
+  routed to the external device explicitly in the first place; now it
+  will, so testing it actually exercises the intended condition. Needs
+  `MODIFY_AUDIO_SETTINGS` + `BLUETOOTH_CONNECT` (added to
+  `AndroidManifest.xml`; `BLUETOOTH_CONNECT` also requested at runtime in
+  `permissions.dart`, best-effort — not fatal if denied). Builds clean.
+  See "Immediate to-dos" for the on-device verification still needed.
 - ~~Shizuku instead of full root~~ — **ruled out, 2026-09-09, see "Ideas
   tried and ruled out."**
 - **Swap the SIM to a different carrier** in the same test device, to
@@ -267,7 +297,13 @@ by how soon they're actionable:
 - **VoLTE vs. legacy circuit-switched call**, if the SIM/network still
   supports falling back to a non-VoLTE call — tests whether the block is
   specific to the IMS/VoLTE audio path (more carrier plumbing, more DRM
-  hooks) or applies uniformly regardless of call type.
+  hooks) or applies uniformly regardless of call type. **Instrumented this
+  session** (not yet observed): `InCallServiceImpl.logCallAudioDiagnostics()`
+  now logs `networkType` (LTE/NR/UMTS/GSM/etc., decoded to a readable
+  name) plus the call's `PROPERTY_HIGH_DEF_AUDIO`/`PROPERTY_WIFI` flags at
+  `STATE_ACTIVE`, so a future repro of #1 can be correlated against call
+  type straight from logcat without a second tool. Read-only, wrapped in
+  try/catch, cannot affect call handling if it fails.
 - **Test whether clamp #2 (the acoustic anti-loopback clamp, see below)
   also fires during a real call's acoustic fallback**, not just Live Mic
   Test self-testing. Force speakerphone during an actual live call and

@@ -112,3 +112,44 @@ individually via Zygisk, which *can* reach app processes) — but that was
 explicitly out of scope for this spike and trades one large, open-ended
 maintenance burden (a native daemon patch) for four smaller but
 still-ongoing ones (one per target app, breaking on every app update).
+
+## Follow-up (2026-09-09): does this also help with root cause #1 (native telephony-call zero-fill)?
+
+state.md's "Ideas not yet tried" asked whether the same class of
+system-level hook investigated above could also help with the native
+telephony-call capture restriction (root cause #1: every `AudioRecord`
+source, including plain `MIC`, gets silently zero-filled by the OS once a
+real cellular call goes active — see `AudioCaptureManager.kt` docstring).
+Answer, reachable from the same evidence gathered above without needing
+hardware: **no, for the same structural reason, and it's actually a
+stronger no than for VoIP apps.**
+
+The zero-fill/mic-block behavior for an active telephony call is enforced
+by the same class of component as the `AudioPlaybackCaptureConfiguration`
+usage-tag restriction — native audio-policy code inside `audioserver`
+(recording-concurrency/privacy policy that mutes or zero-fills
+non-privileged `AudioRecord` reads while a call owns the mic), not
+anything in `system_server`. `audioserver` is started directly by `init`
+from its own native `.rc` script and is never forked from zygote, so
+Zygisk — whose entire mechanism is hooking the zygote fork point — has no
+attachment surface to it, exactly as found above for the VoIP-capture
+question. The only mechanisms that could reach this enforcement point are
+the same two identified above (patching `audioserver`'s native libraries
+via a Magisk overlay, or a persistent root-level Frida injection), with
+the same boot-critical blast radius and no stable reference
+implementation to build from.
+
+It's a *stronger* no than the VoIP case for one additional reason: even if
+the mic-block were bypassed at the `audioserver` level, root cause #1 is
+about a **carrier/OEM privacy restriction on recording live call audio**
+(India 2024+ call-recording rules, ColorOS-enforced) — bypassing it is
+squarely the scenario that restriction exists to prevent, unlike the VoIP
+case where the restriction is a generic platform default with no
+carrier/regulatory backing specific to this data. This spike's
+recommendation is unchanged and now covers both questions: **do not
+pursue system-level `audioserver`-level bypasses for either VoIP playback
+capture or native telephony capture.** `magisk-privileged-module/`
+(`CAPTURE_AUDIO_OUTPUT` via priv-app install, proven out by BCR) remains
+the only validated path to real call audio on a rooted device, because it
+works *with* the platform's own privileged-permission model rather than
+against `audioserver`'s enforcement.

@@ -22,6 +22,18 @@ import android.util.Log
  * product's actual requirement (classify the INCOMING/caller voice), that
  * is exactly the signal needed, and it arrives undistorted by any
  * speaker-to-mic acoustic loop.
+ *
+ * Does NOT apply to native telephony calls (state.md root cause #1) — this
+ * was revisited per state.md "Ideas not yet tried" and ruled out without
+ * needing hardware: it's not just that USAGE_VOICE_COMMUNICATION is an
+ * illegal match target below (documented AOSP restriction). Native cellular
+ * call audio is rendered by the telephony HAL/modem directly to the
+ * earpiece/speaker; it is never an AudioTrack with a playback session
+ * belonging to any app for AudioPlaybackCaptureConfiguration to attach to
+ * in the first place. There is no app-owned session here to capture,
+ * independent of the usage-tag restriction — this API's scope is strictly
+ * "another app's own audio playback" (WhatsApp/Zoom/Telegram/Meet's media
+ * track), never the native dialer path.
  */
 object PlaybackCaptureManager {
     private const val TAG = "PlaybackCaptureManager"
