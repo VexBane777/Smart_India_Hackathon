@@ -3,6 +3,8 @@ package org.vaani.mobile
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Handler
+import android.os.Looper
 import io.flutter.plugin.common.EventChannel
 
 /** Streams the phone's own mic as 0.5s (8000-sample) mono 16kHz PCM chunks
@@ -18,6 +20,7 @@ class AudioCaptureBridge : EventChannel.StreamHandler {
     private var recorder: AudioRecord? = null
     @Volatile private var running = false
     private var thread: Thread? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
         val minBuf = AudioRecord.getMinBufferSize(
@@ -36,7 +39,13 @@ class AudioCaptureBridge : EventChannel.StreamHandler {
                 val read = recorder!!.read(buf, 0, CHUNK_SAMPLES, AudioRecord.READ_BLOCKING)
                 if (read > 0) {
                     val chunk = if (read == CHUNK_SAMPLES) buf.toList() else buf.copyOf(read).toList()
-                    events.success(chunk)
+                    // EventSink.success is @UiThread-only; this loop runs on a
+                    // background Thread, so the call must be posted to the
+                    // main Looper — calling it directly here crashed with
+                    // "Methods marked with @UiThread must be executed on the
+                    // main thread" on a real device (caught only by actually
+                    // running this on hardware, not by unit tests or a build).
+                    mainHandler.post { events.success(chunk) }
                 }
             }
         }
