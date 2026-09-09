@@ -1,6 +1,7 @@
 # voice_guard model training
 
-Produces `../assets/models/voice_detector.tflite`.
+Produces `../assets/models/voice_detector.onnx` (see "Run" below — the app
+runs ONNX directly as of 2026-09-09, no `.tflite` conversion step).
 
 **2026-09-08 update — full-corpus retrain (`runs/voice_guard_v3`), now deployed:**
 Trained on the full ASVspoof2019 LA train partition (2,580 bonafide + all
@@ -138,8 +139,7 @@ python train.py --real data/real --fake data/fake \
     --fake-clean data/fake2021 data/fake_itw_train \
     --out runs/voice_guard_v3 --epochs 30 \
     --channel whatsapp volte clean --device auto --workers 8
-python export_tflite.py --onnx runs/voice_guard_v3/model.onnx \
-    --out ../assets/models/voice_detector.tflite
+cp runs/voice_guard_v3/model.onnx ../assets/models/voice_detector.onnx
 
 # then check it actually generalizes, not just fits ASVspoof:
 python eval_held_out_dirs.py --model runs/voice_guard_v3/model.pt \
@@ -149,10 +149,16 @@ python eval_held_out_dirs.py --model runs/voice_guard_v3/model.pt \
 `--workers` on Windows: keep it well under your core count if you're on a
 16GB-RAM machine — see the `ProcessPoolExecutor` gotcha below.
 
-`tflite_io.dart` already tries loading from `assets/models/voice_detector.tflite`
-first — no code change needed on the Flutter side once the file exists;
-`flutter pub get` / rebuild picks it up automatically since the directory
-is already declared in `pubspec.yaml`.
+**2026-09-09: the app now runs `model.onnx` directly via `flutter_onnxruntime`**
+(`lib/services/src/tflite_io.dart`), not a converted `.tflite`. `export_tflite.py`
+is kept only as a legacy/optional script (e.g. if a future need for actual
+on-device TFLite specifically comes up) — it is no longer part of the
+recommended flow, and `assets/models/voice_detector.tflite` was removed.
+Just copy `model.onnx` straight into `assets/models/voice_detector.onnx`;
+`flutter pub get` / rebuild picks it up automatically (directory already
+declared in `pubspec.yaml`). `.onnx` is gitignored project-wide *except*
+this one shipped asset (see root `.gitignore`'s explicit exception) — every
+other `.onnx` (training runs, intermediates) stays ignored as before.
 
 ## Known gaps (deliberate, not oversights)
 

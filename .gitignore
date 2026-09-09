@@ -25,6 +25,10 @@ venv/
 *.parquet
 *.onnx
 *.pth
+# Exception: the one .onnx actually shipped as an app asset (replaces the
+# old voice_detector.tflite — see voice_guard/lib/services/src/tflite_io.dart).
+# Every other .onnx (training runs, intermediates) stays ignored above.
+!voice_guard/assets/models/voice_detector.onnx
 
 # Superpowers SDD scratch workspace (git-ignored per skill)
 .superpowers/

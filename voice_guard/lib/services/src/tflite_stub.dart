@@ -11,7 +11,7 @@ class TFLiteService {
     _ready = false;
   }
 
-  double infer(List<double> lfcc, List<double> prosody) => _heuristic(lfcc, prosody);
+  Future<double> infer(List<double> lfcc, List<double> prosody) async => _heuristic(lfcc, prosody);
 
   double _heuristic(List<double> lfcc, List<double> prosody) {
     if (lfcc.isEmpty) return 0.15;
@@ -24,7 +24,7 @@ class TFLiteService {
     return raw;
   }
 
-  double scoreChunk(List<double> pcm) {
+  Future<double> scoreChunk(List<double> pcm) {
     final lfcc = AudioProcessor.extractLfcc(pcm);
     final prosody = AudioProcessor.extractProsody(pcm);
     return infer(lfcc, prosody);

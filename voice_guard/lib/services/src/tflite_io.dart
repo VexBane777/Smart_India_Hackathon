@@ -1,45 +1,55 @@
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
-import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 import '../../utils/audio_processor.dart';
 
+/// Runs the exported ONNX model (see model_training/README.md's "Feature
+/// contract" — 63-float [...lfcc, ...prosody] in, (1,2) raw-logit "logits"
+/// out, softmax applied here) via flutter_onnxruntime. Replaces the
+/// previous tflite_flutter path; kept this file's name and the
+/// TFLiteService class name to avoid touching every call site
+/// (audio_service.dart, main.dart, providers) for what's purely an
+/// inference-backend swap, not an API change — infer()/scoreChunk() did
+/// have to become async (ONNX Runtime's session.run is Future-based),
+/// which is why TFLiteServiceBase and the web stub changed too.
 class TFLiteService {
-  Interpreter? _interpreter;
+  OrtSession? _session;
   bool _ready = false;
-  List<int>? _inputShape;
   bool get isReady => _ready;
 
-  Future<void> init() async {
-    try {
-      _interpreter = await Interpreter.fromAsset('assets/models/voice_detector.tflite');
-      _inputShape = _interpreter!.getInputTensor(0).shape;
-      _ready = true;
-      debugPrint('TFLite model loaded from assets/models, input shape: $_inputShape');
-      return;
-    } catch (_) {}
+  static const int _inputDim = 63; // must match model_training's INPUT_DIM (model.py)
 
+  Future<void> init() async {
+    final ort = OnnxRuntime();
     try {
-      _interpreter = await Interpreter.fromAsset('models/voice_detector.tflite');
-      _inputShape = _interpreter!.getInputTensor(0).shape;
+      _session = await ort.createSessionFromAsset('assets/models/voice_detector.onnx');
       _ready = true;
-      debugPrint('TFLite model loaded from models, input shape: $_inputShape');
+      debugPrint('ONNX model loaded from assets/models/voice_detector.onnx');
     } catch (e) {
-      debugPrint('TFLite model not found — using heuristic scorer: $e');
+      debugPrint('ONNX model not found — using heuristic scorer: $e');
       _ready = false;
     }
   }
 
-  double infer(List<double> lfcc, List<double> prosody) {
-    if (_ready && _interpreter != null) {
+  Future<double> infer(List<double> lfcc, List<double> prosody) async {
+    final session = _session;
+    if (_ready && session != null) {
       try {
         final input = [...lfcc, ...prosody];
-        final dim = _inputShape!.last;
-        final trimmed = input.sublist(0, math.min(dim, input.length));
-        while (trimmed.length < dim) { trimmed.add(0); }
-        final inputTensor = [trimmed.map((e) => e.toDouble()).toList()];
-        final output = List.filled(1 * 2, 0.0).reshape([1, 2]);
-        _interpreter!.run(inputTensor, output);
-        final outList = (output[0] as List).map((e) => (e as num).toDouble()).toList();
+        final trimmed = input.sublist(0, math.min(_inputDim, input.length));
+        while (trimmed.length < _inputDim) { trimmed.add(0); }
+
+        final inputValue = await OrtValue.fromList(
+          trimmed.map((e) => e.toDouble()).toList(),
+          [1, _inputDim],
+        );
+        final outputs = await session.run({'features': inputValue});
+        // Output tensor shape is [1, 2]; asFlattenedList() ignores shape
+        // and always returns a plain 1D list, so no reshape needed here.
+        final outList = (await outputs['logits']!.asFlattenedList())
+            .map((e) => (e as num).toDouble())
+            .toList();
+
         final sumOut = outList[0] + outList[1];
         if ((sumOut - 1.0).abs() < 0.05 && outList[0] >= 0 && outList[1] >= 0) {
           return outList[1].clamp(0.0, 1.0);
@@ -50,7 +60,7 @@ class TFLiteService {
         final probs = exps.map((e) => e / sum).toList();
         return probs[1].clamp(0.0, 1.0);
       } catch (e) {
-        debugPrint('TFLite inference failed: $e');
+        debugPrint('ONNX inference failed: $e');
       }
     }
     return _heuristic(lfcc, prosody);
@@ -67,11 +77,11 @@ class TFLiteService {
     return raw;
   }
 
-  double scoreChunk(List<double> pcm) {
+  Future<double> scoreChunk(List<double> pcm) {
     final lfcc = AudioProcessor.extractLfcc(pcm);
     final prosody = AudioProcessor.extractProsody(pcm);
     return infer(lfcc, prosody);
   }
 
-  void dispose() { _interpreter?.close(); }
+  void dispose() { _session?.close(); }
 }

@@ -63,7 +63,7 @@ class AudioService {
 
   void startScoring({Duration interval = const Duration(seconds: 1)}) {
     _timer?.cancel();
-    _timer = Timer.periodic(interval, (_) {
+    _timer = Timer.periodic(interval, (_) async {
       // Require a full 3s window before scoring at all — a partial window
       // (e.g. the first ~0.3-1s right after clearBuffer(), often containing
       // only a dial tone/ring beep or a transient) produced spurious
@@ -86,7 +86,7 @@ class AudioService {
       }
       _signalCtrl.add(true);
 
-      final score = tflite.scoreChunk(chunk);
+      final score = await tflite.scoreChunk(chunk);
       _scoreCtrl.add(score);
     });
   }
@@ -98,7 +98,7 @@ class AudioService {
 
   void clearBuffer() => _buffer.clear();
 
-  void injectBenchmarkTest({required bool isAiVoice}) {
+  Future<void> injectBenchmarkTest({required bool isAiVoice}) async {
     final chunk = List<double>.generate(16000, (i) {
       final t = i / 16000.0;
       if (isAiVoice) {
@@ -115,7 +115,7 @@ class AudioService {
             0.05 * (math.Random(i).nextDouble() - 0.5));
       }
     });
-    final score = tflite.scoreChunk(chunk);
+    final score = await tflite.scoreChunk(chunk);
     _scoreCtrl.add(score);
     final wave = chunk.take(28).toList();
     _pcmCtrl.add(wave);
