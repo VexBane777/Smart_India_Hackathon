@@ -248,6 +248,7 @@ measured number. Doc 8 owns all of this.
 | Wed | Streaming service: VAD, chunker, EMA, state machine, latency instrumentation | WAV → live-updating score end to end |
 | Thu | Streamlit UI: gauge, spectrogram, risk curve, occlusion highlights | 5-minute demo, zero crashes |
 | Fri | Mock bank: transfer → HOLD → OTP modal → hash-chained log; metrics page | full workflow E2E |
+| Fri (parallel) | Module E: Flutter Android app shell, file import + mic capture, gauge/spectrogram/risk curve/occlusion wired to a clearly-labeled stub scorer (bank sim/audit-log UI deferred to after the demo) | Phone runs the identical pipeline as the laptop demo, labeled "simulated — real model pending" |
 | Sat | Record 90 s scam call (Doc 4); 3 rehearsals; backup video; measure latency; airplane-mode test | pitch numbers are real |
 | Sun | Buffer: preload model, README, diagram, Q&A drills | Definition of Done met (§9/§10) |
 
@@ -262,6 +263,7 @@ assembly + polish only.*
 | Models | 5–8 | AASIST/RawNet2; SSL teacher; distilled student; ONNX/INT8; calibration | **peak** — 5050 teacher nights, 4050s sweeps + distillation, Kaggle big-VRAM run | leaderboard exists; student within ~2–3× teacher EER; latency measured |
 | Robustness + FREEZE | 9–10 | four hold-out protocols; partial-spoof; cascade; ECAPA mode; Pi 5 numbers; 3-seed finals | all three in parallel | every protocol reported; **frozen end of week 10** |
 | Ship | 11–12 | model card; dataset release; docs; Docker; CI; demo assets; judge drills; reproducible leaderboard (local + Kaggle) | light | one command retrains and reproduces; demo 3× clean offline |
+| Mobile (Module E) | whenever Module B ships ONNX | swap StubScorer → OnnxScorer at one call site (mobile/lib/scoring); bank HOLD/OTP/release + audit-log UI (Task 12) also picked up here | none (CPU/NPU on-device) | phone app runs real on-device inference, same thresholds as desktop |
 
 **Roles (4):** Corpus lead (data, TeleChannel, releases, consent) · Model lead (baselines,
 teacher, distillation, calibration) · Systems lead (engine, cascade, cluster, CI, Pi) ·
@@ -275,7 +277,8 @@ Product lead (UI, bank sim, demo assets, pitch, Q&A).
 | 0:10–0:25 | "Pre-recorded call, streamed through the *exact* live pipeline in real time — disclosed, not hidden" |
 | 0:25–0:55 | Real victim voice (gauge low) → cloned voice enters (gauge climbs, curve spikes) → 2 occlusion highlights |
 | 0:55–1:10 | Transfer attempted → **HOLD** → OTP step-up modal → "simulated; production plugs into the bank's existing MFA" |
-| 1:10–1:30 | Audit log + metrics slide (EER table, measured latency, calibration) → close |
+| 1:10–1:15 | Hand a phone to a judge running the identical pipeline on the bundled demo call — same gauge, same alert (mobile bank/audit-log panel not built yet — flagged post-demo) |
+| 1:15–1:30 | Audit log + metrics slide (EER table, measured latency, calibration) → close |
 
 Fallbacks in order: live app → backup video → annotated screenshots. Model preloaded,
 airplane mode verified, everything on one laptop with CUDA off.
@@ -336,6 +339,7 @@ never becomes "still training on day 89."
 - [ ] Data: TeleChannel pipeline + recipe + corpus + datasheet + manifest, on HuggingFace
 - [ ] Evaluation: reproducible leaderboard, four hold-out protocols, partial-spoof, calibration, 25-call validation
 - [ ] Engineering: green CI, Docker, one-command retrain, auto-resume cluster docs
+- [ ] Mobile: Android app (Flutter) — Module E, Phase 1 stub-scored + Phase 2 real-model swap point (bank HOLD/OTP/release + audit-log UI deferred to after the demo, Task 12)
 - [ ] Compliance: consent forms, license manifest, DPDP privacy note
 - [ ] Pitch: measured numbers only, Q&A drills done, demo rehearsed 3× clean
 
