@@ -123,6 +123,14 @@ decide which track (if any) to pursue before doing further model work on
 this project — continuing to retrain the current 63-feature representation
 on more/different data will not move this specific problem, per §3.
 
+**Track 3 now has a full scoping/design pass** — see
+`voice_guard/docs/superpowers/plans/2026-09-11-frame-level-sequence-model-plan.md`
+(2026-09-11). Key finding from that scoping: both the Python and Dart
+feature-extraction code already compute the full per-frame LFCC sequence
+and then discard it via mean-pooling — this makes a custom, India-tuned
+frame-level model a smaller lift than importing an academic architecture
+like LCNN would be. Plan only, not yet implemented.
+
 ## 5. Cross-references
 
 - `voice_guard/state.md` — full project state; this file's existence is
