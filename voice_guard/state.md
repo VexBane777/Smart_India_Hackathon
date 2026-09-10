@@ -4,6 +4,19 @@
 session before doing anything else, and update it before ending a session
 that changed status, findings, or plans — see `CLAUDE.md` at the repo root.
 
+## ⚠️ CRITICAL — read `docs/CRITICAL-entity-vs-style-confound.md` before any further model work
+
+Found 2026-09-11, on any device, before touching the model again: the
+current model detects speaking **style** (how much pacing/energy/pitch
+vary), not speaker **entity** (human vs. AI) — confirmed both live
+on-device and quantitatively on held-out data. A human speaking in a
+controlled/monotone register gets false-flagged; a fake with natural-
+sounding pacing slips through. This is a representational ceiling of the
+63-feature design, not a data bug — retraining on more/different data will
+not fix it. Three remediation tracks (cheap/partial to
+expensive/likely-effective) are laid out in that file, none yet started.
+Read it in full before deciding what to do next.
+
 ## Current status (2026-09-09)
 
 **We are close to real-time on-device AI-voice detection working end to

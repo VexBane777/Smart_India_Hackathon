@@ -70,6 +70,16 @@ device. Treat a claim in it as "true when last verified," not gospel —
 spot-check before relying on it if anything looks like it could have
 drifted (a file path, a device's behavior, a build flag).
 
+**⚠️ Before any further model-training work specifically**, read
+`voice_guard/docs/CRITICAL-entity-vs-style-confound.md` first (flagged at
+the top of `voice_guard/state.md` too — this pointer exists in both places
+deliberately, so it surfaces regardless of which file a session reads
+first). Found 2026-09-11: the current model detects speaking *style*, not
+speaker *entity* — confirmed live on-device and quantitatively on held-out
+data, not fixable by retraining on more/different data. This is the single
+most important open concern for whoever works on the model next, on any
+device.
+
 ## Open / unresolved — Module A "final scoped re-review"
 
 A user request came in to: adjudicate a "Module A final scoped re-review"
