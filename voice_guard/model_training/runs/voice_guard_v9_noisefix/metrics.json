@@ -1,0 +1,11 @@
+{
+  "final_val_eer": 0.07048916255088344,
+  "n_train": 80239,
+  "n_val": 20047,
+  "hidden_dims": [
+    64,
+    32
+  ],
+  "weight_decay": 0.0001,
+  "label_smoothing": 0.05
+}

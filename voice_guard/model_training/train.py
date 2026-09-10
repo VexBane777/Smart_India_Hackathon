@@ -23,6 +23,13 @@ import numpy as np
 
 from dataset import build_examples, split_by_source, to_arrays
 
+
+def parse_channel_arg(items: list[str | None]) -> list[str | None]:
+    """Maps the literal string 'none' (any case) to the real no-op sentinel.
+    Everything else (including 'clean') passes through unchanged — see
+    --channel's help text for why 'clean' is NOT a no-degradation recipe."""
+    return [None if r is None or r.lower() == "none" else r for r in items]
+
 # torch/model are imported lazily inside main() — dataset.build_examples()
 # spawns a multiprocessing.ProcessPoolExecutor, and on Windows (spawn-only,
 # no fork) each worker re-execs this script's module-level code. Importing
@@ -73,8 +80,16 @@ def main() -> None:
         nargs="*",
         default=[None],
         help="TeleChannel recipe names to degrade training audio through "
-        "(e.g. whatsapp volte cellular_3g clean); omit for no channel "
-        "processing at all.",
+        "(e.g. whatsapp volte cellular_3g). Pass the literal string 'none' "
+        "for a genuinely undegraded pass — NOTE: TeleChannel's 'clean' "
+        "recipe is NOT a no-op; per vaani/telechannel/configs/channels.yaml "
+        "it still applies RIR reverb + white noise + mic clipping + packet "
+        "loss, only skipping the codec/ffmpeg step (it exists so the "
+        "orchestration can be exercised without ffmpeg installed, not to "
+        "represent undegraded audio). Using 'clean' where 'none' was meant "
+        "was a real bug this project hit (2026-09 sessions) that measurably "
+        "hurt cross-generator generalization. Omit --channel entirely for "
+        "no processing at all (equivalent to --channel none).",
     )
     ap.add_argument(
         "--device",
@@ -86,6 +101,24 @@ def main() -> None:
     )
     ap.add_argument("--workers", type=int, default=None, help="process-pool size for feature extraction")
     ap.add_argument("--seed", type=int, default=0, help="RNG seed for channel degradation.")
+    ap.add_argument("--hidden-dims", type=int, nargs="+", default=[64, 32],
+                     help="MLP hidden layer sizes, e.g. --hidden-dims 128 64.")
+    ap.add_argument("--weight-decay", type=float, default=1e-4,
+                     help="L2 regularization on the Adam optimizer (was 0/absent in every run "
+                     "this project has done so far) — a direct lever against overfitting to "
+                     "spurious per-domain correlations, the exact failure mode this session's "
+                     "code-orange investigation was about.")
+    ap.add_argument("--label-smoothing", type=float, default=0.0,
+                     help="CrossEntropyLoss label smoothing, e.g. 0.05-0.1 to reduce overconfident "
+                     "fitting to training-set-specific quirks.")
+    ap.add_argument("--save-every-epoch-checkpoints", action="store_true",
+                     help="save a state_dict per epoch into <out>/checkpoints/epoch_NN.pt. Every "
+                     "run so far exported whatever the LAST epoch happened to land on, not the "
+                     "best one (found 2026-09-10: v6's best in-distribution epoch was 20/30, but "
+                     "the shipped model came from epoch 30, already known worse). Use "
+                     "select_best_checkpoint.py afterward to pick by *held-out* EER, not "
+                     "in-distribution val_eer — this session's whole finding is that the two can "
+                     "diverge.")
     args = ap.parse_args()
 
     device = args.device
@@ -93,7 +126,11 @@ def main() -> None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Training device: {device}")
 
-    recipes = list(args.channel)
+    recipes = parse_channel_arg(args.channel)
+    if "clean" in recipes:
+        print("WARNING: 'clean' is a TeleChannel debug recipe (RIR+noise+clip+loss, "
+              "codec skipped only to avoid an ffmpeg dependency) — it is NOT a "
+              "no-degradation pass. If you meant 'no processing', pass 'none' instead.")
     print(f"Building examples (channels={recipes})...")
     examples = build_examples(
         args.real, args.fake, channel_recipes=recipes, workers=args.workers, seed=args.seed
@@ -120,10 +157,14 @@ def main() -> None:
         shuffle=True,
     )
 
-    model = VoiceGuardMLP(norm_mean=mean, norm_std=std).to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
-    loss_fn = nn.CrossEntropyLoss()
+    model = VoiceGuardMLP(norm_mean=mean, norm_std=std, hidden_dims=tuple(args.hidden_dims)).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    loss_fn = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     X_val_t = torch.from_numpy(X_val).to(device)
+
+    checkpoint_dir = args.out / "checkpoints"
+    if args.save_every_epoch_checkpoints:
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(args.epochs):
         model.train()
@@ -143,6 +184,9 @@ def main() -> None:
             val_probs = torch.softmax(val_logits, dim=-1)[:, 1].cpu().numpy()
         eer = compute_eer(val_probs, y_val)
         print(f"epoch {epoch + 1}/{args.epochs}  train_loss={total_loss:.4f}  val_eer={eer:.4f}")
+        if args.save_every_epoch_checkpoints:
+            torch.save(model.cpu().state_dict(), checkpoint_dir / f"epoch_{epoch + 1:02d}.pt")
+            model = model.to(device)
 
     model = model.cpu()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -161,7 +205,9 @@ def main() -> None:
         dynamo=False,  # legacy exporter — avoids the onnxscript dep the new one needs
     )
 
-    metrics = {"final_val_eer": eer, "n_train": len(train_ex), "n_val": len(val_ex)}
+    metrics = {"final_val_eer": eer, "n_train": len(train_ex), "n_val": len(val_ex),
+               "hidden_dims": list(args.hidden_dims),
+               "weight_decay": args.weight_decay, "label_smoothing": args.label_smoothing}
     (args.out / "metrics.json").write_text(json.dumps(metrics, indent=2))
     print(f"Saved model.pt / model.onnx / metrics.json -> {args.out}")
     print("Next: python export_tflite.py --onnx", args.out / "model.onnx", "--out", args.out / "voice_detector.tflite")

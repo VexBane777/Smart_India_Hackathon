@@ -37,19 +37,19 @@ class VoiceGuardMLP(nn.Module):
         num_classes: int = NUM_CLASSES,
         norm_mean: np.ndarray | None = None,
         norm_std: np.ndarray | None = None,
+        hidden_dims: tuple[int, ...] = (64, 32),
     ):
         super().__init__()
         self.normalize = FixedNormalize(
             norm_mean if norm_mean is not None else np.zeros(input_dim),
             norm_std if norm_std is not None else np.ones(input_dim),
         )
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, num_classes),
-        )
+        dims = (input_dim, *hidden_dims)
+        layers: list[nn.Module] = []
+        for in_dim, out_dim in zip(dims, dims[1:]):
+            layers += [nn.Linear(in_dim, out_dim), nn.ReLU()]
+        layers.append(nn.Linear(dims[-1], num_classes))
+        self.net = nn.Sequential(*layers)
 
     def set_normalization(self, mean: np.ndarray, std: np.ndarray) -> None:
         self.normalize.mean.copy_(torch.from_numpy(mean.astype(np.float32)))

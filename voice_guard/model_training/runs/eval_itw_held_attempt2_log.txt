@@ -1,0 +1,12 @@
+  ...500/5799 source files processed
+  ...1000/5799 source files processed
+  ...1500/5799 source files processed
+  ...2000/5799 source files processed
+  ...2500/5799 source files processed
+  ...3000/5799 source files processed
+  ...3500/5799 source files processed
+  ...4000/5799 source files processed
+  ...4500/5799 source files processed
+  ...5000/5799 source files processed
+  ...5500/5799 source files processed
+5498 windows from 3368 source files, EER=0.2079

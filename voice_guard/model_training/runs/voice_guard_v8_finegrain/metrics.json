@@ -1,0 +1,14 @@
+{
+  "final_val_eer": 0.10131019911549755,
+  "n_train_phase1": 58139,
+  "n_train_phase2": 12001,
+  "n_val": 17777,
+  "phase1_epochs": 3,
+  "phase2_epochs": 2,
+  "weight_decay": 0.0001,
+  "label_smoothing": 0.05,
+  "hidden_dims": [
+    64,
+    32
+  ]
+}

@@ -1,0 +1,16 @@
+  ...500/5799 source files processed
+  ...1000/5799 source files processed
+  ...1500/5799 source files processed
+  ...2000/5799 source files processed
+  ...2500/5799 source files processed
+  ...3000/5799 source files processed
+  ...3500/5799 source files processed
+  ...4000/5799 source files processed
+  ...4500/5799 source files processed
+  ...5000/5799 source files processed
+  ...5500/5799 source files processed
+Per-source-directory yield (files in -> files surviving >=3s chunking -> windows out):
+  C:\Users\Tuviksh Murudkar\SIH\voice_guard\model_training\data\fake_itw_held: 1361 in -> 831 survived (61%) -> 1731 windows
+  C:\Users\Tuviksh Murudkar\SIH\voice_guard\model_training\data\real_itw_held: 4438 in -> 2537 survived (57%) -> 3767 windows
+5498 windows from 3368 source files, EER=0.2206
+REGRESSION: 0.2206 is worse than baseline 0.1624 - do not deploy.

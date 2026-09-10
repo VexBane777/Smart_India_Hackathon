@@ -1,0 +1,31 @@
+Training device: cuda
+Building examples (channels=['whatsapp', 'volte', None])...
+Building clean (no-degradation) examples from 4 real-clean + 2 fake-clean dirs...
+80239 train windows / 20047 val windows from 69111 source files
+epoch 1/25  train_loss=0.3228  val_eer=0.1248
+epoch 2/25  train_loss=0.2583  val_eer=0.1094
+epoch 3/25  train_loss=0.2409  val_eer=0.1002
+epoch 4/25  train_loss=0.2319  val_eer=0.0954
+epoch 5/25  train_loss=0.2254  val_eer=0.0888
+epoch 6/25  train_loss=0.2211  val_eer=0.0903
+epoch 7/25  train_loss=0.2179  val_eer=0.0843
+epoch 8/25  train_loss=0.2147  val_eer=0.0881
+epoch 9/25  train_loss=0.2123  val_eer=0.0852
+epoch 10/25  train_loss=0.2097  val_eer=0.0802
+epoch 11/25  train_loss=0.2078  val_eer=0.0765
+epoch 12/25  train_loss=0.2054  val_eer=0.0816
+epoch 13/25  train_loss=0.2038  val_eer=0.0797
+epoch 14/25  train_loss=0.2017  val_eer=0.0787
+epoch 15/25  train_loss=0.2005  val_eer=0.0799
+epoch 16/25  train_loss=0.1998  val_eer=0.0779
+epoch 17/25  train_loss=0.1985  val_eer=0.0758
+epoch 18/25  train_loss=0.1976  val_eer=0.0739
+epoch 19/25  train_loss=0.1961  val_eer=0.0770
+epoch 20/25  train_loss=0.1946  val_eer=0.0748
+epoch 21/25  train_loss=0.1950  val_eer=0.0727
+epoch 22/25  train_loss=0.1939  val_eer=0.0770
+epoch 23/25  train_loss=0.1928  val_eer=0.0799
+epoch 24/25  train_loss=0.1926  val_eer=0.0749
+epoch 25/25  train_loss=0.1917  val_eer=0.0705
+Saved model.pt / model.onnx / metrics.json -> runs\voice_guard_v9_noisefix
+Next: python export_tflite.py --onnx runs\voice_guard_v9_noisefix\model.onnx --out runs\voice_guard_v9_noisefix\voice_detector.tflite

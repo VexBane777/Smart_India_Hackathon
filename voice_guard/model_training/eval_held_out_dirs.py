@@ -14,6 +14,7 @@ from pathlib import Path
 import torch
 
 from dataset import build_examples, to_arrays
+from eval_stats import bootstrap_eer_ci
 from model import VoiceGuardMLP
 from train import compute_eer
 
@@ -23,9 +24,20 @@ def main() -> None:
     ap.add_argument("--model", type=Path, required=True)
     ap.add_argument("--real", type=Path, required=True, nargs="+")
     ap.add_argument("--fake", type=Path, required=True, nargs="+")
+    ap.add_argument("--hidden-dims", type=int, nargs="+", default=[64, 32],
+                     help="must match the checkpoint's train.py --hidden-dims.")
+    ap.add_argument("--baseline-eer", type=float, default=None,
+                     help="exit nonzero if the measured EER is worse (higher) than this — "
+                     "e.g. --baseline-eer 0.1624 to gate against v3. Formalizes the "
+                     "manual 'don't deploy a regression' check this project did by hand "
+                     "for attempt1/attempt2/ablation/english_only (2026-09-10).")
+    ap.add_argument("--no-bootstrap", action="store_true",
+                     help="skip the file-level bootstrap CI (faster, but see this session's "
+                     "2026-09-10 checkpoint-sweep noise finding for why you usually want it).")
+    ap.add_argument("--n-bootstrap", type=int, default=1000)
     args = ap.parse_args()
 
-    model = VoiceGuardMLP()
+    model = VoiceGuardMLP(hidden_dims=tuple(args.hidden_dims))
     model.load_state_dict(torch.load(args.model, map_location="cpu", weights_only=True))
     model.eval()
 
@@ -36,6 +48,17 @@ def main() -> None:
         probs = torch.softmax(logits, dim=-1)[:, 1].numpy()
     eer = compute_eer(probs, y)
     print(f"{len(examples)} windows from {len({e.source_file for e in examples})} source files, EER={eer:.4f}")
+
+    if not args.no_bootstrap:
+        source_files = [e.source_file for e in examples]
+        ci = bootstrap_eer_ci(probs, y, source_files, n_bootstrap=args.n_bootstrap)
+        print(f"95% CI (file-level bootstrap, n={ci['n_sources']} files, "
+              f"{args.n_bootstrap} resamples): [{ci['ci_lo']:.4f}, {ci['ci_hi']:.4f}]  "
+              f"(std={ci['std']:.4f})")
+
+    if args.baseline_eer is not None and eer > args.baseline_eer:
+        print(f"REGRESSION: {eer:.4f} is worse than baseline {args.baseline_eer:.4f} - do not deploy.")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

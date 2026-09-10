@@ -1,0 +1,35 @@
+Training device: cuda
+Building phase1 (broad/weak-fingerprint) examples, channels=['whatsapp', 'volte', None]...
+Building phase2 (narrow/strong-fingerprint, 'harmful') examples...
+70140 train windows (58139 phase1 + 12001 phase2) / 17777 val windows from 30852 source files
+[phase1] epoch 1/30  train_loss=0.3919  val_eer=0.1686
+[phase1] epoch 2/30  train_loss=0.3200  val_eer=0.1501
+[phase1] epoch 3/30  train_loss=0.2992  val_eer=0.1390
+[phase1] epoch 4/30  train_loss=0.2864  val_eer=0.1348
+[phase1] epoch 5/30  train_loss=0.2773  val_eer=0.1323
+[phase1] epoch 6/30  train_loss=0.2703  val_eer=0.1252
+[phase1] epoch 7/30  train_loss=0.2644  val_eer=0.1282
+[phase1] epoch 8/30  train_loss=0.2597  val_eer=0.1306
+[phase1] epoch 9/30  train_loss=0.2557  val_eer=0.1271
+[phase1] epoch 10/30  train_loss=0.2511  val_eer=0.1284
+[phase1] epoch 11/30  train_loss=0.2484  val_eer=0.1236
+[phase1] epoch 12/30  train_loss=0.2453  val_eer=0.1191
+[phase1] epoch 13/30  train_loss=0.2419  val_eer=0.1197
+[phase1] epoch 14/30  train_loss=0.2400  val_eer=0.1225
+[phase1] epoch 15/30  train_loss=0.2370  val_eer=0.1206
+[phase1] epoch 16/30  train_loss=0.2345  val_eer=0.1139
+[phase1] epoch 17/30  train_loss=0.2325  val_eer=0.1172
+[phase1] epoch 18/30  train_loss=0.2303  val_eer=0.1161
+[phase1] epoch 19/30  train_loss=0.2281  val_eer=0.1164
+[phase1] epoch 20/30  train_loss=0.2272  val_eer=0.1221
+[phase2] epoch 21/30  train_loss=0.2576  val_eer=0.0863
+[phase2] epoch 22/30  train_loss=0.2454  val_eer=0.0824
+[phase2] epoch 23/30  train_loss=0.2407  val_eer=0.0803
+[phase2] epoch 24/30  train_loss=0.2369  val_eer=0.0815
+[phase2] epoch 25/30  train_loss=0.2350  val_eer=0.0792
+[phase2] epoch 26/30  train_loss=0.2322  val_eer=0.0793
+[phase2] epoch 27/30  train_loss=0.2303  val_eer=0.0803
+[phase2] epoch 28/30  train_loss=0.2286  val_eer=0.0772
+[phase2] epoch 29/30  train_loss=0.2272  val_eer=0.0782
+[phase2] epoch 30/30  train_loss=0.2258  val_eer=0.0789
+Saved model.pt / model.onnx / metrics.json -> runs\voice_guard_v7_newdata_only

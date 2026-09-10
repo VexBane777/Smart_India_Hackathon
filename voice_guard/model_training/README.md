@@ -117,10 +117,30 @@ python data/prep_in_the_wild.py --held-out-fraction 0.2   # speaker-disjoint 44/
 ```
 
 Recommended: degrade the ASVspoof2019 LA train portion through TeleChannel
-recipes (`--channel whatsapp volte cellular_3g clean`) so the model sees
-phone-channel-shaped audio like it will on a real call, not just clean
-studio recordings — the 2021/In-the-Wild portions skip this since they're
-already realistically degraded or already real-world audio.
+recipes (`--channel whatsapp volte none`) so the model sees phone-channel-
+shaped audio like it will on a real call, not just clean studio recordings,
+*while still including a genuinely undegraded pass* — the 2021/In-the-Wild
+portions skip this since they're already realistically degraded or already
+real-world audio.
+
+**Do not use `clean` here expecting "no degradation."** Despite the name,
+`clean` (`vaani/telechannel/configs/channels.yaml`) applies real RIR reverb,
+white noise, mic clipping, and simulated packet loss — it only skips the
+codec/ffmpeg step, so TeleChannel's orchestration can be exercised without
+ffmpeg installed. Using `clean` where "no processing" was intended is a real
+mistake this project made (2026-09-10): four retraining attempts in a row
+regressed cross-generator held-out EER, and the single largest isolated
+contributor (measured directly, ablating every other variable) was exactly
+this — training on `None`-processed audio generalizes meaningfully better
+than training on `'clean'`-processed audio. `train.py --channel` now accepts
+the literal string `none` for a true no-op pass; see its `--help` and
+`voice_guard/state.md`'s "Attempt 2 + follow-up ablations" section for the
+full writeup, evidence, and the other data-integrity bugs found alongside it
+(uneven chunk-yield across sources, a sample-rate/generator confound in
+`en_foreign`/`hi_native`/`hi_foreign`). **Run `check_corpus.py` on every
+real/fake directory pair before a training run** — it catches both classes
+of issue cheaply, before committing to a 20-40 minute feature-extraction +
+training job.
 
 Large downloads on Windows: use a **detached** process (PowerShell
 `Start-Process`, not `run_in_background`/`&`) for anything that runs longer
@@ -134,17 +154,31 @@ The full `voice_guard_v3` command (2019 LA degraded + 2021 LA/2019 dev clean
 + In-the-Wild training split clean, GPU-accelerated MLP step):
 
 ```bash
+# preflight: cheap, catches uneven chunk-yield and technical shortcuts
+# BEFORE the 20-40 minute feature-extraction + training job below.
+python check_corpus.py --pair data/real data/fake \
+    --pair data/real2021 data/fake2021 --pair data/real_itw_train data/fake_itw_train
+
 python train.py --real data/real --fake data/fake \
     --real-clean data/real2021 data/real_itw_train \
     --fake-clean data/fake2021 data/fake_itw_train \
     --out runs/voice_guard_v3 --epochs 30 \
-    --channel whatsapp volte clean --device auto --workers 8
+    --channel whatsapp volte none --device auto --workers 8
 cp runs/voice_guard_v3/model.onnx ../assets/models/voice_detector.onnx
 
-# then check it actually generalizes, not just fits ASVspoof:
+# then check it actually generalizes, not just fits ASVspoof — and gate on it:
 python eval_held_out_dirs.py --model runs/voice_guard_v3/model.pt \
-    --real data/real_itw_held --fake data/fake_itw_held
+    --real data/real_itw_held --fake data/fake_itw_held \
+    --baseline-eer 0.1624   # fails loudly instead of silently shipping a regression
 ```
+
+Note: this documented command uses `none` (a real no-op), not `clean` — see
+the warning above. `train.py`'s own note about the historical v3 model: its
+training log printed `channels=['whatsapp', 'volte', None]`, i.e. it likely
+*already* used a true no-op for that slot despite this file previously
+(wrongly) documenting `clean` — meaning this corrected command is closer to
+what actually produced the deployed model's weights than the old docs were,
+though the exact historical invocation couldn't be fully reconstructed.
 
 `--workers` on Windows: keep it well under your core count if you're on a
 16GB-RAM machine — see the `ProcessPoolExecutor` gotcha below.

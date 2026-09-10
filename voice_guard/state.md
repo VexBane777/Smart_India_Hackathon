@@ -607,18 +607,618 @@ tool-tracked background tasks, never plain foreground calls or detached
 `nohup` processes. Keep `--workers` conservative (2, down from the
 documented 8) on this machine specifically.
 
-**Not done yet, pick up here next (if this session ends before finishing):**
-wait for training attempt 2, compare its cross-generator held-out EER against
-v3's 0.1624 — only deploy (copy `model.onnx` to `assets/models/`) if it's at
-or better than that number, not just "bigger dataset therefore assumed
-better". If attempt 2 still regresses, don't try a third blind attempt —
-stop and think about *why* (candidates not yet tested: the tiny 63→64→32→2
-MLP may simply be under-capacity for a much more heterogeneous task now;
-the disproportionate real/hi_native volume, even capped to 8000, may still
-be pulling the decision boundary away from what the ITW held-out set needs;
-worth an ablation — retrain on the *old* v3 corpus alone with the corrected
-`clean` channel recipe, to isolate "channel-recipe bug" from "new data hurt
-generalization" as two separate explanations before concluding either one).
+## Attempt 2 + follow-up ablations, resolved (2026-09-10 session)
+
+**Attempt 2 confirmed regressed, and none of it is deployed.** Cross-generator
+held-out EER (`eval_held_out_dirs.py --real data/real_itw_held --fake
+data/fake_itw_held`) results, all on the same held-out set, gathered this
+session:
+
+| run | corpus | channel recipe | hidden dims | in-dist val_eer | held-out EER |
+|---|---|---|---|---|---|
+| v3 (baseline, deployed) | old (pre-expansion) | `whatsapp volte None` (see caveat below) | 64,32 | 0.0793 | **0.1624** |
+| attempt1 | new (full accent expansion) | `whatsapp volte` (missing 3rd recipe — a real bug) | 64,32 | — | 0.2028 |
+| attempt2 | new | `whatsapp volte clean` | 64,32 | 0.0853 | 0.2079 |
+| ablation | old (same dirs as v3) | `whatsapp volte clean` | 64,32 | 0.0905 | 0.1877 |
+| english_only | new minus `hi_*` cells (kept `en_native`/`en_foreign`) | `whatsapp volte clean` | **128,64** | 0.0815 | **0.2137 (worst)** |
+
+**None of attempt1/attempt2/ablation/english_only beat v3.** Two things this
+disproves, evidence-backed, not guessed:
+- **"Hindi inclusion is what hurts English/ITW generalization" — refuted.**
+  Removing `hi_native`/`hi_native_capped`/`hi_foreign` entirely (english_only
+  run) did not recover v3's number — it produced the *worst* held-out EER of
+  any run tried, despite in-distribution val_eer being the closest to v3's of
+  any post-v3 attempt (0.0815 vs 0.0793). Don't re-attempt "just drop Hindi"
+  as a fix.
+- **"More MLP capacity fixes generalization" — refuted, at least at this
+  size.** english_only also had `VoiceGuardMLP` bumped from `64,32` to
+  `128,64` hidden dims (now a `--hidden-dims` CLI flag on `train.py` and
+  `eval_held_out_dirs.py`, backward-compatible — old checkpoints still load
+  with the default). Bigger capacity did **not** help the held-out number,
+  and may have let the model fit training-distribution-specific artifacts
+  more closely at generalization's expense (in-dist EER improved while
+  held-out EER got worse — a classic overfit-to-training-distribution
+  signature, though not proven in isolation since capacity and the
+  Hindi-removal changed in the same run).
+
+**The one cleanly isolated, reproducible finding: the channel-recipe change
+(`None` → `'clean'`) accounts for most of the regression by itself.** The
+`ablation` row above changes *only* that one variable vs. v3 (same dirs,
+same 64,32 model) and moves held-out EER from 0.1624 → 0.1877 — a 0.0253
+jump from that one change alone, out of the 0.1624 → 0.2079 total gap
+attempt2 showed (0.0455). The remaining ~0.02 is attributable to the new
+data/composition, but no experiment run so far isolates *which* part of the
+new data causes it (en_native/en_foreign additions are still a live
+suspect, untested in isolation from Hindi-removal and the capacity bump).
+
+**Open caveat, not yet resolved:** v3's own training log literally printed
+`channels=['whatsapp', 'volte', None]` — a real Python `None`, not the
+string `'clean'` — even though `README.md`'s documented "official" v3 command
+says `--channel whatsapp volte clean`. Current `train.py`'s `--channel`
+argparse has no code path that turns a CLI string into `None` (checked
+directly), so it's unclear how the historical v3 run actually produced a
+literal `None` in that list — either an older version of `train.py` behaved
+differently, or the run wasn't invoked via the documented command. This
+means the "v3 baseline" `--channel` behavior is not fully reconstructible
+with today's code, which is itself worth remembering: don't assume `README.md`'s
+documented command is what actually produced the deployed model's weights.
+
+**Recommendation, not yet acted on:** don't chase further blind
+data/capacity attempts. The strongest lever found is the channel recipe;
+next useful experiment (not yet run) would be reproducing v3 as closely as
+current code allows (e.g. degrade `data/real`/`data/fake` through
+`--channel whatsapp volte` and *also* pass them a second time via
+`--real-clean`/`--fake-clean` to get a genuinely undegraded third pass,
+approximating what the literal `None` recipe did) as a sanity check that
+today's code can even reproduce something close to 0.1624 before trusting
+further comparisons against it.
+
+**Still not deployed**: `assets/models/voice_detector.onnx` is unchanged
+from before this session's retraining work — none of v3/attempt1/attempt2/
+ablation/english_only has beaten the currently-deployed model's own
+generalization number, so nothing here should replace it yet.
+
+## Root-cause investigation + fixes + new test suite (2026-09-10, same session)
+
+User asked for a full investigation into why more/broader training data kept
+making cross-generator generalization *worse* (model structure, tests,
+datasets). Found four real, previously-invisible issues, fixed the code-level
+ones, and built a test suite specifically to catch this class of problem
+before another training run is wasted on it.
+
+### Findings, ranked by how much they likely explain the regression
+
+1. **TeleChannel's `'clean'` recipe is not a no-op — this is likely the
+   single biggest contributor.** `vaani/telechannel/configs/channels.yaml`'s
+   `clean` recipe applies real RIR reverb (medium room, wet_gain 0.5), white
+   noise at 25dB SNR, 10% mic-clip probability, and simulated packet loss —
+   it only skips the codec/ffmpeg step (so TeleChannel's orchestration can be
+   exercised without ffmpeg installed; it's a debug/test recipe, not a
+   "clean audio" stand-in). `train.py`'s README and this session's earlier
+   `ablation`/`attempt2`/`english_only` runs all used `'clean'` believing it
+   meant "no degradation" — it doesn't. This directly explains the isolated
+   0.1624→0.1877 jump found earlier from that one variable alone.
+   **Fixed**: `train.py --channel` now accepts the literal string `none`
+   (case-insensitive) as a true no-op sentinel, via a new pure, tested
+   function `parse_channel_arg()`. A runtime warning prints if `'clean'` is
+   passed, explaining what it actually does. `README.md`'s documented command
+   changed from `--channel whatsapp volte clean` to `--channel whatsapp volte
+   none`.
+
+2. **A perfect sample-rate/generator confound in `en_foreign`, `hi_native`,
+   and `hi_foreign`.** Measured directly (`sf.info`, 150-file samples,
+   header-only reads): in every one of these three cells, **100% of fake
+   examples are natively 22050Hz** (XTTS-v2's native output rate) **and 100%
+   of real examples are natively 16000Hz**. (`en_native` is NOT confounded
+   this way — its fake portion is mostly ASVspoof-style, native 16000Hz.)
+   This is a textbook shortcut-learning trap: a model can trivially use
+   "was this resampled from 22050Hz" as a proxy for "is this fake," which
+   scores great on a validation split drawn from the *same* contaminated
+   cell but cannot transfer to ITW's held-out set, which doesn't share this
+   generator/rate confound. This is likely why `english_only` (which kept
+   `en_foreign`, still confounded) scored *worse* than everything else
+   despite the closest-to-v3 in-distribution fit.
+   **Not fixed at the data level** (would need fake audio for these cells
+   from more than one generator/sample-rate — a data-collection task, not a
+   code fix). **Is now caught automatically**: `dataset_audit.py` +
+   `check_corpus.py` scan for this, and `test_dataset_integrity.py` has a
+   real (currently, correctly) failing test for it —
+   `test_no_technical_shortcut_in_accent_cell[en_foreign|hi_native|hi_foreign]`.
+   **Do not train on these three cells' fake/real pairs as currently
+   constituted** — the failing tests are the gate working as intended, not a
+   bug to silence.
+
+3. **`features.chunk_audio` silently drops any clip <3s, and survival rates
+   are wildly uneven and source-correlated, unmeasured until now.** Measured
+   (300-file samples, `floor(duration/3)`): `fake2021` (the single largest
+   source, 185K files) — **69% of files produce zero training examples**;
+   `en_native` real — **74% zero**; `real2021` — 47% zero; meanwhile
+   `en_foreign`/`hi_native`/`hi_foreign` survive at ~100%. This isn't
+   necessarily wrong on its own — the production app only ever feeds the
+   model real 3-second windows, so a training clip too short to occur in
+   production arguably shouldn't be forced in — but nobody was measuring
+   this, so every "directory X contributes N files" mental model this
+   session (and probably v3's) was never the *actual* trained-on
+   composition. **Fixed**: `dataset.build_examples` now always prints a
+   per-source-directory yield report (files in -> files survived -> windows
+   out) to stderr, and `check_corpus.py` gives a cheap header-only estimate
+   of the same thing before committing to a full training run.
+
+4. **`dataset.split_by_source` keyed on bare filename (`wav_path.name`), not
+   full path** — a latent bug: if two different source directories ever
+   produced a file with the same basename, their chunks would be silently
+   treated as one "source" for train/val splitting. **Checked for actual
+   impact**: scanned all 14 real/fake directories used this session
+   (296,566 unique basenames) — **zero collisions found**, so this hasn't
+   corrupted anything observed so far. **Fixed anyway** (it's wrong on
+   principle): `Example.source_file` is now the resolved absolute path.
+   Also added `Example.source_dir` (needed for the yield report in #3).
+
+Also checked and ruled out: train/held-out leakage (`real_itw_train` vs.
+`real_itw_held`, and fake equivalents — zero filename overlap, confirmed via
+full-directory scan, now a permanent regression test); native-sample-rate
+consistency in the base ASVspoof corpus (`data/real`, `data/fake`,
+`data/real2021`, `data/fake2021`, `data/real_itw_train`, `data/fake_itw_train`
+all sampled as pure 16000Hz — the confound in #2 is specific to the new
+accent-expansion cells, not the base corpus).
+
+### New files
+
+- `dataset_audit.py` — `scan_technical_metadata()`, `find_technical_shortcuts()`,
+  `audit_directory_pair()`. Flags any cheap technical field (sample rate,
+  channel count, subtype) that separates real/fake within a directory pair
+  above an 85% one-sided threshold. Also runnable standalone
+  (`python dataset_audit.py --real X --fake Y`).
+- `check_corpus.py` — preflight CLI gate: chunk-yield estimate + shortcut
+  scan for one or more `--pair REAL FAKE` directory pairs, exits nonzero if
+  anything looks risky. Run this **before** `train.py`, not after.
+- `test_dataset_integrity.py` — the actual test suite `test_pipeline_smoke.py`
+  never could be (that one only ever sees synthetic 4s tones). Covers:
+  chunk_audio's <3s contract, split_by_source's full-path keying (synthetic
+  cross-directory collision test), TeleChannel `'clean'`-is-not-a-noop /
+  `None`-is-a-true-noop (guards against re-introducing finding #1),
+  `parse_channel_arg`'s string-to-None mapping, ITW train/held-out leakage
+  (real corpus, skips if absent), and the technical-shortcut scan
+  parametrized over every accent cell and base-corpus pair (real corpus,
+  skips if absent) — this last one is the test that would have caught
+  finding #2 before four wasted training runs. Run: `pytest
+  test_dataset_integrity.py test_pipeline_smoke.py` from `model_training/`.
+  As of this writing: **16 passed, 3 failed** (the 3 failures are
+  `en_foreign`/`hi_native`/`hi_foreign`'s known, still-unfixed confound —
+  correct, expected, not a regression to chase).
+
+### Other changes
+
+- `model.py`/`train.py`/`eval_held_out_dirs.py`: `VoiceGuardMLP` hidden-layer
+  sizes are now a constructor/CLI parameter (`--hidden-dims`, default `64 32`
+  unchanged for backward compat with existing checkpoints) — added earlier
+  this session for the `english_only` capacity-bump experiment, kept.
+- `eval_held_out_dirs.py`: new `--baseline-eer` flag — exits nonzero if the
+  measured EER is worse than a given number. Formalizes the manual "don't
+  deploy a regression" check done by hand all session into something a
+  script (or a future CI-style gate) can enforce.
+
+### Finding #2 fixed via option (a) — sourced real alternative-generator fake data (2026-09-10, later same session)
+
+User asked to try the three options in order. **(a) worked for all three
+contaminated cells — never needed (b) band-limiting or (c) exclusion.**
+
+- **`hi_native` + `hi_foreign`**: generated new Hindi fake speech via
+  `facebook/mms-tts-hin` (Meta's MMS VITS checkpoint, `transformers`,
+  already had `.venv_tts` with `transformers==4.57.1`/torch+cuda available
+  from the earlier XTTS setup) — **confirmed native `sampling_rate=16000`**,
+  matching real audio's rate exactly (unlike XTTS's 22050Hz). Real Hindi
+  text came from this project's own already-downloaded OpenSLR103
+  transcription file (`data/openslr_hindi/train/transcription.txt`, 99,925
+  lines) — no new text source needed. New script: `data/gen_hindi_mms_fake.py`
+  (concatenates 3 transcript lines per clip so it reliably clears
+  `chunk_audio`'s 3s cutoff). Generated 500 clips into `hi_native`, 60 into
+  `hi_foreign`. Single fixed voice (MMS-TTS-hin has no multi-speaker
+  conditioning) — an acknowledged limitation (adds generator/rate diversity,
+  not speaker diversity), not something the script hides.
+- **`en_foreign`**: needed a voice-*cloning* model (not a fixed voice) to
+  preserve the "foreign-accented English" property — a plain TTS voice would
+  have swapped the sample-rate confound for an accent confound instead of
+  fixing anything. Used **Coqui YourTTS**
+  (`tts_models/multilingual/multi-dataset/your_tts`, already available via
+  the `TTS` package in `.venv_tts`) — zero-shot cloning via `speaker_wav`
+  (same interface `gen_accents_fake.py` already uses for XTTS), **confirmed
+  native `output_sample_rate=16000`**. New script:
+  `data/gen_en_foreign_fake_yourtts.py`, mirroring `gen_accents_fake.py`'s
+  pattern (clone each `en_foreign` real speaker reading a stock English
+  sentence) but with YourTTS instead of XTTS. Generated 395 new clips.
+- New files copied directly into `data/accents_split/train/fake/{hi_native,
+  hi_foreign,en_foreign}/` (not routed through `split_accents.py`) —
+  **caveat**: `split_accents.py` does a manifest-driven, speaker-disjoint,
+  additive (non-clearing) rebuild of `accents_split/`. The MMS-TTS clips all
+  share one literal `speaker_id` ("mms_tts_hin_fixed_voice"), so a future
+  full re-run of `split_accents.py` could put **all** of them on one side
+  (train or held) depending on the RNG, and being additive, could duplicate
+  files already manually copied here. **Do not blindly re-run
+  `split_accents.py` without first giving each MMS-TTS clip a unique
+  `speaker_id`** (e.g. `mms_tts_hin_{i:05d}`) in the manifest, or the train/
+  held split for these clips will be inconsistent with what's on disk now.
+- **Result: all 19 tests in `test_dataset_integrity.py`/`test_pipeline_smoke.py`
+  now pass**, including all 4 `test_no_technical_shortcut_in_accent_cell`
+  parametrizations and all 3 base-corpus pairs. `check_corpus.py` run across
+  every real/fake pair used in training: clean, exit 0.
+- **Retraining now** (`runs/voice_guard_v5_fixed`, launched detached/
+  `nohup`+`disown` per the memory-constraint workaround) on the fixed
+  corpus, `--channel whatsapp volte none` (the real no-op, not `'clean'`),
+  default (unbumped) `64,32` hidden dims — capacity was never shown to help
+  (english_only's bump made things worse), so this isolates "does fixing the
+  actual confounds beat v3's 0.1624" as cleanly as possible. Being watched
+  via a background Monitor; not yet complete as of this writing. **Do not
+  assume this beats baseline until `eval_held_out_dirs.py --baseline-eer
+  0.1624` actually says so** — gate on it, don't just eyeball in-distribution
+  val_eer, per every lesson from attempt1/2/ablation/english_only above.
+
+## v5_fixed regressed too — code-orange root-cause investigation (2026-09-10, later same session)
+
+v5_fixed (fixed corpus + corrected `none` recipe) scored held-out EER **0.2206 — the worst of the
+entire session** (vs. v3's 0.1624 baseline), despite the best in-distribution fit of any post-v3
+attempt (0.0805). User called for the "code-orange workflow" (per `Cyberstrike`'s docs): stop
+training, invent a small bracket of root-cause hypotheses uninformed, do a wide-net literature
+review, revise every hypothesis with citations, then produce new test ideas.
+
+**Full writeup**: [`docs/superpowers/specs/notes/2026-09-10-model-regression-invention-uninformed.md`](docs/superpowers/specs/notes/2026-09-10-model-regression-invention-uninformed.md)
+(pre-research, 7 hypotheses I1-I7) → [`docs/superpowers/specs/2026-09-10-model-regression-design.md`](docs/superpowers/specs/2026-09-10-model-regression-design.md)
+(the reviewed, cited verdict — 2 kept, 3 modified, 1 replaced, 1 refuted, plus one new finding).
+
+**Headline result**: the whole session's failure mode is a named, published phenomenon
+("negative transfer" from training on diverse deepfake sources with strong per-generator
+fingerprints — the "1+1<2" finding), not a mystery unique to this pipeline. More specifically,
+Kwak et al. 2021 (arXiv:2106.12914, "Speech is Silver, Silence is Golden") documents that
+ASVspoof2019 bonafide clips have systematically longer leading/trailing silence than spoofed
+clips, and that correcting for it moves a real detector's EER from 3.6%→15.5% — the exact corpus
+family `data/real`/`fake`/`real2021`/`fake2021` are built from.
+
+**Measured our own corpus for this and found it, plus something worse**: the ASVspoof-derived base
+corpus *and the ITW held-out benchmark itself* both show the literature's documented direction
+(real has somewhat more silence than fake). But `en_foreign`/`hi_native` — this project's own
+XTTS/YourTTS/MMS-TTS-generated accent cells — show the **opposite** direction (fake has ~3x more
+trailing silence, and runs measurably longer overall). Confirmed this predates this session's
+fixes (the original pre-session XTTS-only fake pool already had it). **Fixing the sample-rate
+confound (E5 in the design doc) did not remove this second, independent confound — it was never
+addressed, and is a strong candidate for why v5_fixed didn't recover.**
+
+**New tooling**: `dataset_audit.py` gained `find_acoustic_shortcuts` (a rank-based AUC
+separability check for continuous descriptors — leading silence, trailing silence, duration —
+generalizing the earlier categorical technical-metadata check). Wired into `audit_directory_pair`
+and therefore `check_corpus.py` automatically. `test_dataset_integrity.py`'s
+`test_no_shortcut_in_accent_cell` (renamed from `test_no_technical_shortcut_in_accent_cell`) now
+runs both checks — **currently, correctly, failing again for `en_foreign` (trailing silence +
+duration) and `hi_native`/`hi_foreign` (duration)**, this time for the newly-found reason. This is
+the gate working as designed, not a regression to chase.
+
+**Not done yet**: the silence/duration confound itself is not fixed (would need consistent
+lead/trail silence trimming across all clips, real and fake, all sources, before feature
+extraction — the literature's own recommended practice — plus re-examining whether the
+`pauseRatio` prosody feature should be recomputed post-trim). No retrain attempted after this
+finding — per the user's explicit instruction to stop training and do the investigation first.
+Also flagged, not yet tried: a curriculum-based training strategy (weak-fingerprint sources first,
+strong-fingerprint/single-generator sources folded in gradually) from the "1+1<2" negative-transfer
+literature, and treating v3's 0.1624 as a possibly-lucky number rather than a stable ground truth,
+given documented cases of ASVspoof-trained models scoring worse than random on In-the-Wild.
+
+## Silence/duration confound fixed, corpus fully clean (2026-09-10, later same session)
+
+User said "now start implementing" — implemented the literature-endorsed fix from the design doc.
+
+**`dataset.py` gained `trim_edge_silence()`** (threshold 0.01 amplitude, randomized 0.05-0.15s pad
+— not a fixed constant, which would just be a new, cleaner boundary artifact) — applied
+**unconditionally** to every clip, every source, real and fake, at load time (`_process_file`,
+right after `_load_mono_16k`, before channel degradation/chunking). Since `build_examples` is
+shared by `train.py` and `eval_held_out_dirs.py`, this applies consistently to training AND
+held-out eval with a single change — no separate flag needed. Verified directly: re-measuring
+`en_foreign`/`hi_native` post-trim showed the ~0.45-0.55s real/fake trailing-silence gap collapse
+to ~0.03-0.05s.
+
+**`dataset_audit.py`'s `scan_acoustic_metadata` now measures post-trim by default** (`post_trim=
+True`) — i.e. what training actually sees now, not the raw on-disk files — so `check_corpus.py`
+reflects the fixed pipeline.
+
+**`duration_s` was a second, separate symptom of the same root problem**, not fixed by silence
+trimming alone: `gen_hindi_mms_fake.py`'s original fixed-3-line concatenation produced Hindi fake
+clips with median ~8s vs. real hi_native's ~3.5s / hi_foreign's ~5.7s — itself a measurable
+shortcut (mechanistically weaker than silence, since chunk windows don't carry a duration feature,
+but still flagged and worth fixing properly rather than rationalizing away). Fixed by rewriting
+`synth_clip` to target a **per-clip duration sampled from the real corpus's measured distribution**
+(`TARGET_DURATION_RANGE`, per cell) instead of a fixed line count, with a hard trim to the target
+once reached. **First attempt at the trim introduced a brand-new, self-inflicted shortcut**: hard-
+truncating exactly at the target sample count sometimes lands mid-voiced-frame with zero room left
+for `trim_edge_silence`'s own padding, so `hi_foreign`'s fake side measured `trail_silence_s=0`
+essentially always — a fresh AUC=0.89 confound, found immediately by the same test suite that
+caught the original one. Fixed by appending a short (~0.15s) low-amplitude synthetic tail after the
+hard trim, giving `trim_edge_silence` real quiet content to pad around, same as any real
+recording's room-tone. Regenerated the full 500+60-clip Hindi batch twice more (narrowing
+`hi_native`'s target range from (3.2, 6.5) to (3.1, 5.0) after a first full-batch pass still
+measured AUC=0.15, just inside the flagged range) before all cells passed cleanly.
+
+**Result: all 21 tests in `test_dataset_integrity.py`/`test_pipeline_smoke.py` pass — zero shortcuts
+found, technical or acoustic, across every real/fake pair used in training** (`check_corpus.py`
+confirms, exit 0, across `data/real`, `real2021`, `real_itw_train`, and all 4 accent cells).
+
+**Retraining now** (`runs/voice_guard_v6`, same corrected recipe as v5_fixed — `--channel whatsapp
+volte none`, default 64,32 hidden dims — launched detached/`nohup`+`disown`, watched via background
+Monitor) to see whether this actually recovers generalization. Not complete as of this writing.
+**Gate on `eval_held_out_dirs.py --baseline-eer 0.1624` before believing anything** — the session's
+own repeated lesson.
+
+**One known approximation, not yet reconciled**: `check_corpus.py`'s chunk-yield estimate
+(`estimate_yield`) still measures raw on-disk file duration via `sf.info`, not post-trim duration —
+trimming can only ever *reduce* effective duration, so actual training-time yield may run slightly
+lower than what `check_corpus.py` reports. Not fixed this session; a minor precision gap, not a
+correctness bug (worst case, the preflight tool is slightly optimistic about yield, never
+pessimistic).
+
+## v6 result + curriculum training implemented (2026-09-10, later same session)
+
+**v6 (both confounds fixed, full corpus, `--channel whatsapp volte none`) held-out EER = 0.2036** —
+second-best post-v3 result of the session, and the best in-distribution fit of the whole session
+(0.0772 at epoch 20), but still worse than v3's 0.1624. Telling comparison: `ablation` (old corpus
+only, no accent cells at all, 0.1877) still beats `v6` (old corpus + the now-confound-free accent
+cells, 0.2036). **Removing shortcuts stopped the model cheating; it didn't give it a way to
+reconcile the different domains** — exactly the "1+1<2" negative-transfer pattern from the design
+doc's idea I4, whose cited mitigation (a curriculum: broad/weak-fingerprint sources first, then
+fold in narrow/strong-fingerprint sources gradually) had not yet been tried.
+
+**User asked for the curriculum approach explicitly.** New file: `train_curriculum.py` — two-stage
+training, not a new architecture. A single train/val split (by source, as always) is taken across
+the *full* combined corpus up front, so val_eer is tracked on the same fixed set through both
+phases and comparable to every other run this session. Normalization (`FixedNormalize`) is fit on
+the full combined training set, not phase 1 alone, matching what's actually used at inference.
+
+- **Phase 1** (`--phase1-*`, broad/weak-fingerprint): base ASVspoof2019 (`data/real`/`fake`,
+  channel-degraded) + ASVspoof2021/2019dev (`data/real2021`/`fake2021`) + In-the-Wild train
+  (`data/real_itw_train`/`fake_itw_train`) + `en_native` (already a ~20-generator mix per
+  `accent_manifest.csv` — decro, codecfake, fake_or_real, xtts_v2_clone, ~17 mlaad architectures).
+  Trained alone for `--phase1-epochs`.
+- **Phase 2** (`--phase2-*`, narrow/"harmful"/strong-fingerprint): `en_foreign` (YourTTS + a little
+  XTTS), `hi_native`/`hi_foreign` (MMS-TTS-hin + a little XTTS) — folded in for `--phase2-epochs`
+  more epochs, training on phase1+phase2 **combined** (not phase2 alone — the point is
+  reconciling domains, not forgetting phase 1).
+
+Smoke-tested with a tiny synthetic 2-phase corpus (2+2 epochs) before committing to the real run —
+passed cleanly, including the assertion that every train example's `source_dir` resolves into
+exactly one phase.
+
+**Launched**: `runs/voice_guard_curriculum`, `--phase1-epochs 20 --phase2-epochs 10` (30 total,
+matching every other run's epoch budget for comparability), same corrected `--channel whatsapp
+volte none`, default `64,32` hidden dims, on the fully-fixed (confound-free) corpus. Detached/
+`nohup`+`disown`, watched via background Monitor. **Not complete as of this writing — gate on
+`eval_held_out_dirs.py --baseline-eer 0.1624` before believing anything, same as always.**
+
+## Curriculum result + weight-selection tooling + new-data-only experiment (2026-09-10, later)
+
+**Curriculum result: held-out EER = 0.2005** — small improvement over v6 (0.2036), still worse
+than baseline (0.1624) and worse than `ablation` (0.1877, old corpus alone). Reported to user: even
+with both confounds fixed AND the cited curriculum mitigation applied, the accent-expanded corpus
+still can't beat the pre-expansion baseline — shifting weight toward "v3's number may rest on a
+corpus-specific idiosyncrasy this feature representation can't reproduce at more diversity," not
+"one more bug to find."
+
+User asked two things: (1) "look at the model and improve the weights, maybe manual fine-tuning,"
+(2) leave the old ASVspoof-era corpus out entirely, train only on newly-added data. Clarified
+there's no LLM here — `VoiceGuardMLP` is a ~6K-parameter MLP, too small for any meaningful
+hand-edit-the-weights workflow; the real levers are training-recipe changes.
+
+**Found a real, free bug while looking**: every run this session exported whatever the *last*
+epoch happened to land on, never checking whether an earlier epoch was better. Confirmed: v6's
+best in-distribution epoch was 20/30 (val_eer=0.0772) but the shipped model came from epoch 30
+(0.0835) — a checkpoint already known worse, shipped anyway because nothing tracked or compared
+epochs.
+
+**Implemented, both `train.py` and `train_curriculum.py`**:
+- `--weight-decay` (default `1e-4`, was 0/absent every run so far) — L2 regularization, a direct
+  lever against overfitting to spurious per-domain correlations (this session's whole subject).
+- `--label-smoothing` (default `0.0`, opt-in) — reduces overconfident fitting to training-set-
+  specific quirks.
+- `--save-every-epoch-checkpoints` — saves a state_dict per epoch into `<out>/checkpoints/`.
+
+**New file `select_best_checkpoint.py`**: sweeps every saved checkpoint against the real held-out
+set and keeps whichever epoch actually minimizes **held-out** EER, not in-distribution val_eer —
+deliberately not "pick the best in-distribution epoch," since this session's whole finding is that
+the two metrics can diverge or move in opposite directions. Cheap by construction: held-out feature
+extraction runs once, each checkpoint only costs a forward pass over the cached features. Smoke-
+tested (both `train.py`/`train_curriculum.py`'s new flags, and the selector itself) on the
+synthetic 2-phase corpus before the real run.
+
+**Corpus change for this run**: dropped `data/real`/`fake`/`real2021`/`fake2021` (ASVspoof-era
+base) entirely. Kept `data/real_itw_train`/`fake_itw_train` (real-world, not ASVspoof-era, matches
+the eval distribution) as phase 1's `--phase1-real`/`--phase1-fake` (degraded through `--channel
+whatsapp volte none`), `en_native` as phase 1's `--phase1-*-clean` (still the ~20-generator mix),
+and `en_foreign`/`hi_native`/`hi_foreign` as phase 2 (unchanged from the `curriculum` run).
+
+**Launched**: `runs/voice_guard_v7_newdata_only` — same 20+10 epoch curriculum split, weight decay
+1e-4, label smoothing 0.05, every-epoch checkpointing. Detached/`nohup`+`disown`, watched via
+background Monitor. Plan once it finishes: run `select_best_checkpoint.py` against the real
+held-out set to pick the winning epoch, *then* `eval_held_out_dirs.py --baseline-eer 0.1624` on
+that selected checkpoint — not the final epoch. Not complete as of this writing.
+
+## v7 result + fine-grained checkpoint sweep found the first beat-baseline result (2026-09-10, later)
+
+**v7 (new-data-only, no ASVspoof base, best whole-epoch checkpoint) = 0.1709** — best of anything
+without the old corpus, still short of v3's 0.1624. Notably: held-out EER was **best at epoch 1**
+and got monotonically worse every subsequent whole-epoch checkpoint, sharply worse once phase 2
+(the narrow-generator cells) got folded in (epoch 21+: ~0.24-0.26 vs. phase-1-only's ~0.17-0.24) —
+even as in-distribution val_eer kept improving throughout. Confirmed 908 steps/epoch for phase1
+(58,139 windows / batch 64) — "epoch 1" is already substantial fitting, not an undertrained model.
+
+User asked what "best epoch" means mechanistically, and how to find genuinely better checkpoints
+from the same training mechanism rather than accepting whole-epoch granularity. Added
+`--checkpoint-every-n-steps` to `train_curriculum.py` (saves `checkpoints/step_NNNNNN.pt` inside
+the epoch loop, in addition to whole-epoch checkpoints) and broadened `select_best_checkpoint.py`'s
+glob to sweep both. Ran a fine-grained pass (`runs/voice_guard_v8_finegrain`, checkpoint every 50
+steps, 3+2 epochs, same weight-decay/label-smoothing as v7) — **103 checkpoints swept, best:
+`step_000950`, held-out EER = 0.1557 — the first result of the entire session to beat v3's 0.1624**,
+confirmed directly via `eval_held_out_dirs.py --baseline-eer 0.1624` (exit 0, no regression flag).
+
+**Important caveat raised and being actively checked, not glossed over**: the 6 checkpoints
+immediately around step 950 (steps 900-1150, 50-step apart, same single training trajectory) swing
+across a 0.024 range (0.1557-0.1797) with no clean monotonic shape — noise-scale variance, not an
+obvious smooth peak. With 103 checkpoints evaluated against one fixed, finite held-out set (4662
+windows), picking the single minimum has a real multiple-comparisons risk: if true performance in
+this region actually hovers around 0.17-0.18, sweeping 103 noisy candidates will often produce an
+apparent minimum below 0.1624 by chance alone. **Not yet validated as a genuine improvement, not
+noise.** Launched an independent replicate to check: `runs/voice_guard_v8b_seed1`, identical recipe,
+`--seed 1` — note `--seed` only controls channel-degradation randomness in this codebase (no
+`torch.manual_seed` anywhere), so weight init and batch-shuffle order were *already* independently
+random between v8_finegrain and this replicate; this run is a legitimate independent draw for
+exactly the randomness being tested. **If a similarly low EER reproduces near the same step-count
+region, that's real signal. If not, 0.1557 was cherry-picked noise.** Not complete as of this
+writing — do not deploy `voice_guard_v8_finegrain_best/model.pt` until this is checked.
+
+## Replication check failed, bootstrap CIs built, and a pipeline-versioning bug found (2026-09-10, later)
+
+**The step_950/step_600 "beat baseline" results did NOT replicate.** An independent replicate
+(`voice_guard_v8b_seed1`, same recipe, different random init/batch order — note `--seed` here only
+controls channel-degradation randomness, no `torch.manual_seed` anywhere in this codebase, so every
+invocation already gets independently-random weight init/shuffling) put its own minimum at step 600
+(EER 0.1538), completely unrelated to run 1's step-950 cluster. Sub-baseline dips appeared at
+essentially random locations in both runs (950/1000/1150 in run 1; 600/700/1200/2250/2550 in run
+2) — the signature of sampling noise on the held-out estimate via a multiple-comparisons trap
+(~100 checkpoints swept against one fixed, finite eval set), not a genuine trainable optimum.
+
+**User asked to fix the actual measurement problem** (shrink/quantify the noise floor) rather than
+keep guessing. Built `eval_stats.py::bootstrap_eer_ci` — resamples at the **file** level (not
+window level; windows from the same clip are correlated), giving a proper 95% CI per model. Wired
+into `eval_held_out_dirs.py` (default on; `--no-bootstrap` to skip). ~2,802 independent held-out
+files gives roughly ±0.7-point standard error per checkpoint — confirms the earlier noise diagnosis
+quantitatively.
+
+**Found a second, more important bug while re-measuring for CIs**: `build_examples` (shared by
+training AND eval) now includes the unconditional silence-trim fix added earlier this session
+(before `v6`). Re-evaluating the *exact same, unchanged* v3 checkpoint through today's pipeline
+gives **0.1538**, not the original 0.1624 — because the held-out eval windows themselves are now
+trimmed differently than when 0.1624 was first measured. **Every comparison against "0.1624" for
+v6/curriculum/v7/v8/v8b onward was checked against the wrong reference number** — a real
+methodology bug this session introduced, not a training result. attempt1/attempt2/ablation/
+english_only/v5_fixed (measured before the silence-trim fix existed) remain correctly compared to
+the original 0.1624; nothing needs to be redone for those.
+
+**Corrected comparison, all against the properly re-measured v3 baseline (0.1538, CI [0.1409,
+0.1687]), all with 95% file-level bootstrap CIs:**
+
+| model | EER | 95% CI | vs. v3 |
+|---|---|---|---|
+| v3 (re-measured, current pipeline) | 0.1538 | [0.1409, 0.1687] | reference |
+| v8b_seed1 (step 600) | 0.1538 | [0.1385, 0.1706] | indistinguishable |
+| v8_finegrain (step 950) | 0.1557 | [0.1375, 0.1735] | indistinguishable |
+| v7 new-data-only (best epoch) | 0.1709 | [0.1525, 0.1875] | indistinguishable (CIs overlap) |
+| curriculum (old + new data mixed) | 0.2005 | [0.1772, 0.2231] | **significantly worse** (no CI overlap) |
+| v6 (old + new data mixed) | 0.2036 | [0.1821, 0.2259] | **significantly worse** (no CI overlap) |
+
+**This changes the conclusion from "nothing beats baseline" to something more specific and useful:
+mixing the old ASVspoof-era corpus with the new accent-expansion data (v6, curriculum) is robustly,
+statistically worse than baseline — not noise, real signal (non-overlapping CIs). Training on the
+new accent data *alone*, with no ASVspoof base (v7 and its fine-grained descendants), is
+statistically indistinguishable from baseline — not proven better, but not proven worse either,**
+which is a materially different and more actionable finding than this session's earlier "every
+attempt regressed" framing.
+
+**Not yet done**: nothing has been *proven* to beat v3 with adequate statistical confidence — the
+next useful step, if pursued, would be a properly powered comparison (larger held-out set, or
+averaging EER over several independently-trained new-data-only models) to get a tight enough CI to
+tell "matches baseline" apart from "modestly beats it," since point estimates alone (0.1538 vs
+0.1538, 0.1557) are right at the resolution limit of what a ~2,802-file eval set can distinguish.
+
+## CRITICAL: the actual production bug, and why this whole session's training work was aimed at the wrong benchmark (2026-09-10, urgent — demo in ~1 day)
+
+**User revealed the real, current, production-blocking problem**: the *currently deployed* model
+(`assets/models/voice_detector.onnx`, dated 2026-09-09 21:16 — i.e. it is v3, unchanged all session)
+fires 80-100% "AI DETECTED" on real human speech the instant any ambient noise is present, and only
+calms down to correct behavior in near-silence. **This is not new** — it's the exact, already-
+documented root cause from the 2026-09-09 "Accent/clone data pipeline" session (see that section
+above): `VOICE_RECOGNITION` capture runs with AGC/noise-suppression off, so live-mic
+`energyVariance`/`zcrVariance` see real ambient noise the training corpus (studio ASVspoof + clean
+ITW) never did, and the model reads "noisy real speech" as anomalous/synthetic.
+
+**This whole session's six-plus training attempts (attempt1 through v8b, curriculum, corpus
+ablations, bootstrap-CI validation) never targeted this bug at all** — every single evaluation was
+against the ITW held-out benchmark (cross-generator spoof detection accuracy), a completely
+different axis from "does real noisy human speech get correctly called real." Root-caused,
+fixed confounds, validated statistically — all on the wrong target. This was a real miss: should
+have re-read this file's own "Current status"/known-bugs section before diving into ITW-focused
+retraining.
+
+**The fix already existed, unused all day**: `data/real_noise_aug/{en_native,hi_native}` (11,519
+real speech clips + real MUSAN ambient noise mixed in, `augment_with_noise.py`, built 2026-09-09
+*specifically* for this bug) was **never included in a single training run today** (v6, curriculum,
+v7, v8, v8b, v9 all omitted it until now). This is real-only augmentation by design (teaches "noisy
+≠ synthetic," doesn't touch the fake side).
+
+**Measured the actual bug directly, quantified**: split `real_noise_aug` 80/20 (`data/
+real_noise_aug_split/{train,held}/{en_native,hi_native}`, seed 0). Ran the *currently deployed*
+model (`runs/voice_guard_v3/model.pt`) against the held 20% (964 windows, real speech only — no
+fake counterpart needed for a pure false-positive-rate check): **47.3% of real, ambient-noise
+speech windows misclassified as fake** (mean fake-probability 0.4765). This is the real,
+demo-relevant metric — not ITW EER — and confirms the user's report is a real, measured defect, not
+an on-device-only artifact (the 80-100% figure at the app layer likely compounds further via the
+EMA/alert-gating logic on top of this already-high per-window rate).
+
+**Launched the targeted fix**: `runs/voice_guard_v9_noisefix` — plain `train.py` (not curriculum;
+kept simple/fast given the ~1-day demo deadline), base corpus (`data/real`/`fake` degraded via
+`--channel whatsapp volte none`, `data/real2021`, `data/real_itw_train`) **plus
+`real_noise_aug_split/train/{en_native,hi_native}` as additional `--real-clean`** — deliberately
+excluding the accent-diversity cells (`en_foreign`/`hi_native` fake, etc.) from this run to keep
+scope tight and directly on-target for the noise bug, not re-litigating this session's earlier,
+separate accent-coverage investigation. 25 epochs, weight-decay 1e-4, label-smoothing 0.05,
+every-epoch checkpointing (so `select_best_checkpoint.py` can pick by the metric that matters).
+Not complete as of this writing.
+
+**Plan once it finishes, in order**:
+1. Sweep checkpoints — but select by **false-positive rate on `real_noise_aug_split/held`**, not
+   ITW EER (that's the axis that was actually broken). Consider a combined criterion (don't regress
+   ITW EER too much while fixing FPR) rather than optimizing FPR alone in case that trades away
+   genuine spoof-catching ability.
+2. Re-measure the same 47.3%-FPR test on the new model — needs to drop sharply and consistently
+   (not just via checkpoint-selection noise, given the multiple-comparisons lesson from earlier
+   this session — a large, unambiguous drop, not a marginal one, is what to trust here).
+3. **Verify on-device before demo, if a phone is available** — every claim in this file about v3
+   "working" was verified via Live Mic Test with a controlled AI-clip-through-external-speaker
+   setup, not real noisy human speech; this bug is why that distinction matters. Do not repeat the
+   mistake of shipping on offline metrics alone if there is any way to test live before the demo.
+4. Only replace `assets/models/voice_detector.onnx` if 1-3 all check out. If time runs out before
+   on-device verification is possible, ship the offline-validated fix anyway only if the FPR
+   improvement is large and unambiguous, and say so plainly rather than presenting it as fully
+   verified.
+
+## Noise-fix result: real, large, unambiguous — candidate model ready, not yet deployed (2026-09-10)
+
+**`runs/voice_guard_v9_noisefix` finished (25 epochs).** Swept every epoch checkpoint against
+**noise-FPR** (false-positive rate on `data/real_noise_aug_split/held/{en_native,hi_native}`, real
+speech only) alongside ITW-EER, not just the ITW metric this session had been chasing all day.
+
+**Result — every single checkpoint improved dramatically, not just a lucky one:**
+
+| model | noise-FPR (real ambient-noise speech misclassified as fake) | ITW held-out EER |
+|---|---|---|
+| v3 (currently deployed, unchanged) | **47.3%** | 0.1538 (re-measured, current pipeline) |
+| v9_noisefix, range across all 25 epochs | 9.6%–20.8% | 0.156–0.193 |
+| **v9_noisefix epoch 22 (chosen)** | **10.4%** | **0.1602**, CI [0.1431, 0.1775] |
+
+This is a ~35-40 point drop in false-positive rate at *every* checkpoint, not a marginal
+checkpoint-selection artifact — categorically different in scale from the noise-level differences
+(~1-3 points) this session spent the whole day learning to distrust. ITW EER cost is not
+statistically significant: epoch 22's CI [0.1431, 0.1775] fully overlaps v3's re-measured CI
+[0.1409, 0.1687] (the `eval_held_out_dirs.py --baseline-eer` gate flags it as a raw-number
+"regression," but the CIs say otherwise — same situation as `v7` earlier this session).
+
+**Candidate model exported**: `runs/voice_guard_v9_noisefix_final/{model.pt,model.onnx}` (epoch
+22's weights). **Not yet copied into `assets/models/voice_detector.onnx`** — recommended next step
+(told to user): verify on-device via Live Mic Test with real ambient noise before replacing the
+shipped asset, if a phone is available before the demo; if not possible in the remaining time,
+ship this candidate anyway given the size and consistency of the offline improvement, but say so
+plainly rather than presenting it as on-device-verified.
+
+**Root-cause note for next session**: this whole day's ITW-focused investigation (confounds,
+curriculum, statistical validation) never touched the actual reported production bug — should have
+re-read this file's own already-documented false-positive/noise-robustness finding from
+2026-09-09 before starting. `data/real_noise_aug/{en_native,hi_native}` (11,519 clips, built
+specifically for this bug) sat unused through v6/curriculum/v7/v8/v8b before finally being used
+here. Lesson: check this file's existing known-bugs section against what's actually being
+optimized before committing to a benchmark.
 
 ## Housekeeping done this session
 

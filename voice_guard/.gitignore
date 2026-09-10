@@ -43,3 +43,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# model_training: Python venvs and raw downloaded corpora (multi-GB audio
+# datasets) — direct subdirectories of data/ only, so data/*.py, data/*.csv
+# etc. (the actual prep/gen scripts and small manifests) stay tracked.
+model_training/.venv313/
+model_training/.venv_tts/
+model_training/data/*/

@@ -1,0 +1,35 @@
+Training device: cuda
+Building phase1 (broad/weak-fingerprint) examples, channels=['whatsapp', 'volte', None]...
+Building phase2 (narrow/strong-fingerprint, 'harmful') examples...
+96428 train windows (84512 phase1 + 11916 phase2) / 24089 val windows from 83961 source files
+[phase1] epoch 1/30  train_loss=0.2663  val_eer=0.1772
+[phase1] epoch 2/30  train_loss=0.1910  val_eer=0.1691
+[phase1] epoch 3/30  train_loss=0.1689  val_eer=0.1431
+[phase1] epoch 4/30  train_loss=0.1547  val_eer=0.1519
+[phase1] epoch 5/30  train_loss=0.1452  val_eer=0.1437
+[phase1] epoch 6/30  train_loss=0.1377  val_eer=0.1543
+[phase1] epoch 7/30  train_loss=0.1322  val_eer=0.1412
+[phase1] epoch 8/30  train_loss=0.1277  val_eer=0.1369
+[phase1] epoch 9/30  train_loss=0.1232  val_eer=0.1470
+[phase1] epoch 10/30  train_loss=0.1187  val_eer=0.1372
+[phase1] epoch 11/30  train_loss=0.1160  val_eer=0.1293
+[phase1] epoch 12/30  train_loss=0.1134  val_eer=0.1374
+[phase1] epoch 13/30  train_loss=0.1105  val_eer=0.1450
+[phase1] epoch 14/30  train_loss=0.1084  val_eer=0.1403
+[phase1] epoch 15/30  train_loss=0.1063  val_eer=0.1360
+[phase1] epoch 16/30  train_loss=0.1041  val_eer=0.1383
+[phase1] epoch 17/30  train_loss=0.1020  val_eer=0.1350
+[phase1] epoch 18/30  train_loss=0.1005  val_eer=0.1277
+[phase1] epoch 19/30  train_loss=0.0985  val_eer=0.1390
+[phase1] epoch 20/30  train_loss=0.0969  val_eer=0.1323
+[phase2] epoch 21/30  train_loss=0.1584  val_eer=0.0816
+[phase2] epoch 22/30  train_loss=0.1377  val_eer=0.0837
+[phase2] epoch 23/30  train_loss=0.1308  val_eer=0.0778
+[phase2] epoch 24/30  train_loss=0.1265  val_eer=0.0794
+[phase2] epoch 25/30  train_loss=0.1234  val_eer=0.0758
+[phase2] epoch 26/30  train_loss=0.1203  val_eer=0.0759
+[phase2] epoch 27/30  train_loss=0.1180  val_eer=0.0764
+[phase2] epoch 28/30  train_loss=0.1148  val_eer=0.0785
+[phase2] epoch 29/30  train_loss=0.1138  val_eer=0.0762
+[phase2] epoch 30/30  train_loss=0.1115  val_eer=0.0755
+Saved model.pt / model.onnx / metrics.json -> runs\voice_guard_curriculum

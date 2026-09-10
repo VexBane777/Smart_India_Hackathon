@@ -5,6 +5,12 @@ noise as real/fake stand-ins). This does NOT validate detection accuracy;
 it only proves the code runs end-to-end before pointing it at a real
 corpus. Real accuracy validation happens on ASVspoof (see train.py's
 docstring).
+
+For corpus-composition/data-integrity issues this suite structurally can't
+see (uneven chunk-yield across sources, technical shortcuts like a
+sample-rate/generator confound, train/held-out leakage, the split-by-source
+basename bug) — see test_dataset_integrity.py and check_corpus.py, added
+2026-09-10 after those exact issues caused four wasted retraining attempts.
 """
 from __future__ import annotations
 

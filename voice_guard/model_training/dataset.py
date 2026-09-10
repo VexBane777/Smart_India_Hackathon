@@ -41,6 +41,50 @@ class Example:
     features: np.ndarray
     label: int
     source_file: str
+    source_dir: str  # which --real/--fake/--real-clean/--fake-clean dir this came from
+
+
+SILENCE_TRIM_THRESHOLD = 0.01  # matches dataset_audit.py's leading/trailing-silence measure
+SILENCE_TRIM_PAD_RANGE = (0.05, 0.15)  # seconds; randomized per file, not a fixed constant
+
+
+def trim_edge_silence(
+    pcm: np.ndarray, sr: int = SAMPLE_RATE, thresh: float = SILENCE_TRIM_THRESHOLD,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Trims leading/trailing near-silence, leaving a small randomized pad
+    (not zero, and not one fixed constant — either would just be a new,
+    cleaner boundary artifact instead of the one being removed).
+
+    Why this exists (2026-09-10, code-orange investigation,
+    voice_guard/docs/superpowers/specs/2026-09-10-model-regression-design.md):
+    leading/trailing silence duration is a documented confound in
+    ASVspoof-lineage corpora (Kwak et al. 2021, arXiv:2106.12914 — bonafide
+    clips run systematically longer silence than spoofed ones there), and
+    this project's own TTS-generated accent cells (en_foreign, hi_native)
+    were measured to have the *opposite* bias (fake clips ~3x more trailing
+    silence than real). A corpus mixing both isn't "no shortcut" — it's an
+    inconsistent one a model can still exploit locally per sub-corpus. This
+    trims the clip-boundary artifact (specific to how each source was
+    recorded/synthesized) while leaving internal content — including natural
+    mid-speech pauses `extract_prosody`'s pauseRatio genuinely measures —
+    untouched. Applied unconditionally to every clip, real and fake, every
+    source, at load time: the fix is "make the corpus consistent," not
+    "correct just the cells found contaminated so far."
+
+    Only affects the first/last chunk_audio window of a clip in practice —
+    a clip trimmed below 3s is then correctly dropped by chunk_audio's
+    existing >=3s cutoff, same as any other short clip (see its docstring)."""
+    rng = rng or np.random.default_rng()
+    above = np.abs(pcm) > thresh
+    if not above.any():
+        return pcm  # fully silent/near-silent input; chunk_audio will drop it
+    first = int(np.argmax(above))
+    last = len(pcm) - 1 - int(np.argmax(above[::-1]))
+    pad = int(rng.uniform(*SILENCE_TRIM_PAD_RANGE) * sr)
+    start = max(0, first - pad)
+    end = min(len(pcm), last + 1 + pad)
+    return pcm[start:end]
 
 
 def _load_mono_16k(path: Path) -> np.ndarray:
@@ -65,11 +109,12 @@ def _maybe_channel(
 
 
 def _process_file(
-    args: tuple[Path, int, list[str | None], np.random.SeedSequence],
+    args: tuple[Path, int, str, list[str | None], np.random.SeedSequence],
 ) -> list[Example]:
-    wav_path, label, channel_recipes, seed_seq = args
+    wav_path, label, source_dir, channel_recipes, seed_seq = args
     rng = np.random.default_rng(seed_seq)
     pcm = _load_mono_16k(wav_path)
+    pcm = trim_edge_silence(pcm, rng=rng)
     out: list[Example] = []
     for recipe in channel_recipes:
         degraded = _maybe_channel(pcm, recipe, rng)
@@ -78,7 +123,14 @@ def _process_file(
                 Example(
                     features=extract_features(chunk),
                     label=label,
-                    source_file=wav_path.name,
+                    # Full resolved path, not wav_path.name: several corpora sourced
+                    # into this pipeline use sequentially-numbered filenames
+                    # (1.wav, 10005.wav, ...) that collide across directories.
+                    # split_by_source groups by this field, so a bare basename
+                    # would silently merge unrelated clips from different
+                    # corpora/labels into one "source" for train/val splitting.
+                    source_file=str(wav_path.resolve()),
+                    source_dir=source_dir,
                 )
             )
     return out
@@ -106,11 +158,12 @@ def build_examples(
     independent per file even though workers run as separate processes —
     a single shared np.random.Generator can't be meaningfully advanced
     across a process pool the way it can in-process."""
-    tasks: list[tuple[Path, int, list[str | None]]] = []
+    tasks: list[tuple[Path, int, str, list[str | None]]] = []
     for label, dirs in ((0, real_dir), (1, fake_dir)):
         for directory in _as_dir_list(dirs):
+            source_dir = str(Path(directory).resolve())
             for wav_path in sorted(Path(directory).glob("*.wav")):
-                tasks.append((wav_path, label, list(channel_recipes)))
+                tasks.append((wav_path, label, source_dir, list(channel_recipes)))
 
     seed_seqs = np.random.SeedSequence(seed).spawn(len(tasks))
     tasks = [(*t, ss) for t, ss in zip(tasks, seed_seqs)]
@@ -120,16 +173,55 @@ def build_examples(
     if workers <= 1 or len(tasks) < 2:
         for task in tasks:
             examples.extend(_process_file(task))
-        return examples
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            done = 0
+            for result in pool.map(_process_file, tasks, chunksize=4):
+                examples.extend(result)
+                done += 1
+                if done % 500 == 0:
+                    print(f"  ...{done}/{len(tasks)} source files processed", file=sys.stderr)
 
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        done = 0
-        for result in pool.map(_process_file, tasks, chunksize=4):
-            examples.extend(result)
-            done += 1
-            if done % 500 == 0:
-                print(f"  ...{done}/{len(tasks)} source files processed", file=sys.stderr)
+    report_yield(tasks, examples)
     return examples
+
+
+def report_yield(
+    tasks: list[tuple], examples: list[Example]
+) -> dict[str, dict]:
+    """Per-source-directory yield report: how many input files actually
+    survived chunk_audio's 3s-minimum cutoff to become >=1 training example,
+    vs. how many were silently dropped entirely. Directory file counts alone
+    are not the training corpus composition — this is (found the hard way,
+    2026-09-10: some sources lose ~70% of files this way, others ~0%, which
+    silently and unevenly reweights every corpus mix)."""
+    files_per_dir: dict[str, set[str]] = {}
+    for task in tasks:
+        wav_path, _label, source_dir, _recipes = task[0], task[1], task[2], task[3]
+        files_per_dir.setdefault(source_dir, set()).add(str(wav_path.resolve()))
+
+    surviving_per_dir: dict[str, set[str]] = {}
+    windows_per_dir: dict[str, int] = {}
+    for ex in examples:
+        surviving_per_dir.setdefault(ex.source_dir, set()).add(ex.source_file)
+        windows_per_dir[ex.source_dir] = windows_per_dir.get(ex.source_dir, 0) + 1
+
+    report = {}
+    print("Per-source-directory yield (files in -> files surviving >=3s chunking -> windows out):",
+          file=sys.stderr)  # noqa: keep ASCII-only, printed to Windows consoles
+    for source_dir, all_files in sorted(files_per_dir.items()):
+        n_in = len(all_files)
+        n_survived = len(surviving_per_dir.get(source_dir, set()))
+        n_windows = windows_per_dir.get(source_dir, 0)
+        frac = n_survived / n_in if n_in else float("nan")
+        report[source_dir] = {
+            "files_in": n_in, "files_survived": n_survived,
+            "windows_out": n_windows, "survival_frac": frac,
+        }
+        flag = "  <-- >50% of files produced ZERO training examples" if frac < 0.5 else ""
+        print(f"  {source_dir}: {n_in} in -> {n_survived} survived ({frac:.0%}) "
+              f"-> {n_windows} windows{flag}", file=sys.stderr)
+    return report
 
 
 def split_by_source(

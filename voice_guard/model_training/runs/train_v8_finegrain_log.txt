@@ -1,0 +1,10 @@
+Training device: cuda
+Building phase1 (broad/weak-fingerprint) examples, channels=['whatsapp', 'volte', None]...
+Building phase2 (narrow/strong-fingerprint, 'harmful') examples...
+70140 train windows (58139 phase1 + 12001 phase2) / 17777 val windows from 30852 source files
+[phase1] epoch 1/5  train_loss=0.3917  val_eer=0.1689
+[phase1] epoch 2/5  train_loss=0.3247  val_eer=0.1441
+[phase1] epoch 3/5  train_loss=0.3039  val_eer=0.1479
+[phase2] epoch 4/5  train_loss=0.3158  val_eer=0.1069
+[phase2] epoch 5/5  train_loss=0.2947  val_eer=0.1013
+Saved model.pt / model.onnx / metrics.json -> runs\voice_guard_v8_finegrain
