@@ -11,9 +11,9 @@ import 'call_service.dart';
 class PlaybackCaptureService {
   static const _method = MethodChannel('com.voiceguard/calls');
   final _consentCtrl = StreamController<bool>.broadcast();
-  final CallService? _callService;
+  final CallService? callService;
 
-  PlaybackCaptureService({CallService? callService}) : _callService = callService {
+  PlaybackCaptureService({this.callService}) {
     _method.setMethodCallHandler(_onMethodCall);
   }
 
@@ -23,7 +23,7 @@ class PlaybackCaptureService {
       _consentCtrl.add(args?['granted'] as bool? ?? false);
       return null;
     }
-    return _callService?.handleMethodCall(call);
+    return callService?.handleMethodCall(call);
   }
 
   Stream<bool> get consentResult => _consentCtrl.stream;
