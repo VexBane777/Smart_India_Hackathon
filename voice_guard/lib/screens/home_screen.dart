@@ -1,14 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../providers/call_state_provider.dart';
 import '../providers/risk_score_provider.dart';
-import '../widgets/shad_glass_card.dart';
-import '../widgets/shad_glass_scaffold.dart';
 import '../widgets/shad_half_donut_chart.dart';
 import '../widgets/shad_badge.dart';
-import '../design/tokens.dart';
-import '../utils/constants.dart';
 import 'call_screen.dart';
 import 'logs_screen.dart';
 import 'protected_call_screen.dart';
@@ -22,7 +19,8 @@ class HomeScreen extends StatelessWidget {
     final callState = context.watch<CallStateProvider>().state;
     final risk = context.watch<RiskScoreProvider>().current;
 
-    return ShadGlassScaffold(
+    return Scaffold(
+      backgroundColor: const Color(0xFF131315),
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -30,104 +28,104 @@ class HomeScreen extends StatelessWidget {
         title: Row(
           children: [
             Container(
-              width: 32,
-              height: 32,
+              width: 3,
+              height: 16,
               decoration: BoxDecoration(
-                color: ShadTokens.primary,
-                borderRadius: BorderRadius.circular(ShadTokens.radiusMd),
-                boxShadow: ShadTokens.shadowSm,
+                color: const Color(0xFF9AA8BB),
+                borderRadius: BorderRadius.circular(2),
               ),
-              child: const Icon(LucideIcons.activity, color: Colors.white, size: 17),
             ),
-            const SizedBox(width: 10),
-            const Text(
-              AppConstants.appName,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.5,
-                color: ShadTokens.foreground,
+            const SizedBox(width: 8),
+            Text(
+              'SYSTEM STATUS',
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.5,
+                color: const Color(0xFF9AA8BB),
               ),
             ),
           ],
         ),
       ),
       body: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         children: [
-          // ── Active Call Float Banner (Only shown when call is underway) ──
+          // ── Active Call Floating Banner (Only shown when call is underway) ──
           if (!callState.isIdle) ...[
-            ShadGlassCard(
+            Container(
               margin: const EdgeInsets.only(bottom: 16),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              tintColor: callState.isActive ? ShadTokens.primary : Colors.white,
-              opacity: callState.isActive ? 0.92 : 0.80,
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const CallScreen()),
+              decoration: BoxDecoration(
+                color: const Color(0xFF18181B),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFF27272A)),
               ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(ShadTokens.radiusMd),
-                      border: Border.all(color: ShadTokens.border),
+              child: InkWell(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CallScreen()),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF27272A),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        callState.isActive ? LucideIcons.phoneCall : LucideIcons.phoneIncoming,
+                        color: const Color(0xFF21D4B2),
+                        size: 18,
+                      ),
                     ),
-                    child: Icon(
-                      callState.isActive
-                          ? LucideIcons.phoneCall
-                          : LucideIcons.phoneIncoming,
-                      color: callState.isActive ? ShadTokens.primary : const Color(0xFF2563EB),
-                      size: 18,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          callState.isActive ? 'Live Call Monitored' : 'Incoming Call',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: callState.isActive ? Colors.white : ShadTokens.foreground,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            callState.isActive ? 'Live Call Monitored' : 'Incoming Call',
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
                           ),
-                        ),
-                        Text(
-                          callState.number ?? 'Carrier Call',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: callState.isActive ? Colors.white70 : ShadTokens.muted,
+                          Text(
+                            callState.number ?? 'Carrier Call',
+                            style: GoogleFonts.inter(
+                              fontSize: 11,
+                              color: const Color(0xFF8E9192),
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  if (risk != null)
-                    ShadBadge(
-                      label: '${risk.percent}% RISK',
-                      variant: risk.score > 0.7
-                          ? ShadBadgeVariant.destructive
-                          : (risk.score > 0.3
-                              ? ShadBadgeVariant.suspicious
-                              : ShadBadgeVariant.verified),
+                    if (risk != null)
+                      ShadBadge(
+                        label: '${risk.percent}% RISK',
+                        variant: risk.score > 0.7
+                            ? ShadBadgeVariant.destructive
+                            : (risk.score > 0.3
+                                ? ShadBadgeVariant.suspicious
+                                : ShadBadgeVariant.verified),
+                      ),
+                    const SizedBox(width: 6),
+                    const Icon(
+                      LucideIcons.chevronRight,
+                      color: Color(0xFF8E9192),
+                      size: 16,
                     ),
-                  const SizedBox(width: 6),
-                  Icon(
-                    LucideIcons.chevronRight,
-                    color: callState.isActive ? Colors.white70 : ShadTokens.muted,
-                    size: 16,
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
 
-          // ── Minimalist Half-Donut Chart: Human vs AI ──
+          // ── Minimalist Half-Donut Chart: 148 CELLS SCANNED ──
           ShadHalfDonutChart(
             totalCount: 148,
             humanCount: 138,
@@ -137,227 +135,174 @@ class HomeScreen extends StatelessWidget {
               MaterialPageRoute(builder: (_) => const LogsScreen()),
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 28),
 
-          // ── Monochromatic Capabilities Section Title ──
-          const Padding(
-            padding: EdgeInsets.only(left: 4, bottom: 12),
-            child: Text(
-              'Security Capabilities',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.6,
-                color: ShadTokens.muted,
-              ),
-            ),
-          ),
-
-          // ── Capability 1: Live Call & Scanner ──
-          ShadGlassCard(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const CallScreen()),
-            ),
+          // ── Defense Vectors Header ──
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
             child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF4F4F5),
-                    borderRadius: BorderRadius.circular(ShadTokens.radiusLg),
-                    border: Border.all(color: ShadTokens.border),
-                  ),
-                  child: const Icon(
-                    LucideIcons.phoneCall,
-                    color: ShadTokens.foreground,
-                    size: 20,
+                Text(
+                  'DEFENSE VECTORS',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.0,
+                    color: const Color(0xFF71717A),
                   ),
                 ),
-                const SizedBox(width: 14),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Live Call & Mic Scanner',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.2,
-                          color: ShadTokens.foreground,
-                        ),
-                      ),
-                      SizedBox(height: 2),
-                      Text(
-                        'Dialpad, real-time telemetry, & microphone clone test',
-                        style: TextStyle(fontSize: 11, color: ShadTokens.muted),
-                      ),
-                    ],
+                Text(
+                  '4 Active',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF71717A),
                   ),
                 ),
-                const Icon(LucideIcons.chevronRight, size: 16, color: ShadTokens.muted),
-              ],
-            ),
-          ),
-
-          // ── Capability 2: VoIP Protection ──
-          ShadGlassCard(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const VoipProtectionScreen()),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF4F4F5),
-                    borderRadius: BorderRadius.circular(ShadTokens.radiusLg),
-                    border: Border.all(color: ShadTokens.border),
-                  ),
-                  child: const Icon(
-                    LucideIcons.headphones,
-                    color: ShadTokens.foreground,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'VoIP App Shield',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.2,
-                          color: ShadTokens.foreground,
-                        ),
-                      ),
-                      SizedBox(height: 2),
-                      Text(
-                        'Playback capture for WhatsApp, Telegram, & Zoom',
-                        style: TextStyle(fontSize: 11, color: ShadTokens.muted),
-                      ),
-                    ],
-                  ),
-                ),
-                const Icon(LucideIcons.chevronRight, size: 16, color: ShadTokens.muted),
-              ],
-            ),
-          ),
-
-          // ── Capability 3: Protected Call ──
-          ShadGlassCard(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ProtectedCallScreen()),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF4F4F5),
-                    borderRadius: BorderRadius.circular(ShadTokens.radiusLg),
-                    border: Border.all(color: ShadTokens.border),
-                  ),
-                  child: const Icon(
-                    LucideIcons.shieldCheck,
-                    color: ShadTokens.foreground,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Encrypted Protected Call',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.2,
-                          color: ShadTokens.foreground,
-                        ),
-                      ),
-                      SizedBox(height: 2),
-                      Text(
-                        'End-to-end encrypted WebRTC P2P voice channel',
-                        style: TextStyle(fontSize: 11, color: ShadTokens.muted),
-                      ),
-                    ],
-                  ),
-                ),
-                const Icon(LucideIcons.chevronRight, size: 16, color: ShadTokens.muted),
-              ],
-            ),
-          ),
-
-          // ── Capability 4: Audit Traces & Recordings ──
-          ShadGlassCard(
-            margin: const EdgeInsets.only(bottom: 24),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const LogsScreen()),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF4F4F5),
-                    borderRadius: BorderRadius.circular(ShadTokens.radiusLg),
-                    border: Border.all(color: ShadTokens.border),
-                  ),
-                  child: const Icon(
-                    LucideIcons.fileText,
-                    color: ShadTokens.foreground,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Audit Traces & Recordings',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.2,
-                          color: ShadTokens.foreground,
-                        ),
-                      ),
-                      SizedBox(height: 2),
-                      Text(
-                        'Inspect forensic WAV recordings & inference logs',
-                        style: TextStyle(fontSize: 11, color: ShadTokens.muted),
-                      ),
-                    ],
-                  ),
-                ),
-                const Icon(LucideIcons.chevronRight, size: 16, color: ShadTokens.muted),
               ],
             ),
           ),
           const SizedBox(height: 8),
+
+          // ── Grouped Defense Vectors Card (Figma Main.png) ──
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF18181B),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFF27272A), width: 1),
+            ),
+            child: Column(
+              children: [
+                // Vector 1: Live Call Shield
+                _vectorRow(
+                  icon: LucideIcons.shieldCheck,
+                  title: 'Live Call Shield',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const CallScreen()),
+                  ),
+                ),
+                const Divider(color: Color(0xFF27272A), height: 1, thickness: 1),
+
+                // Vector 2: VoIP App Guard
+                _vectorRow(
+                  icon: LucideIcons.phone,
+                  title: 'VoIP App Guard',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const VoipProtectionScreen()),
+                  ),
+                ),
+                const Divider(color: Color(0xFF27272A), height: 1, thickness: 1),
+
+                // Vector 3: Encrypted Voice
+                _vectorRow(
+                  icon: LucideIcons.lock,
+                  title: 'Encrypted Voice',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ProtectedCallScreen()),
+                  ),
+                ),
+                const Divider(color: Color(0xFF27272A), height: 1, thickness: 1),
+
+                // Vector 4: Forensic Evidence
+                _vectorRow(
+                  icon: LucideIcons.audioWaveform,
+                  title: 'Forensic Evidence',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const LogsScreen()),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 32),
+
+          // ── Run Acoustic Forensic Scan Stadium Button (Figma Main.png) ──
+          GestureDetector(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const CallScreen()),
+              );
+            },
+            child: Container(
+              height: 54,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(999),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 10,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(LucideIcons.fingerprint, color: Colors.black, size: 22),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Run Acoustic Forensic Scan',
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                      color: Colors.black,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
         ],
+      ),
+    );
+  }
+
+  Widget _vectorRow({
+    required IconData icon,
+    required String title,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1C1C1E),
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFF27272A), width: 1),
+              ),
+              child: Icon(icon, color: Colors.white, size: 19),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                title,
+                style: GoogleFonts.inter(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.2,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

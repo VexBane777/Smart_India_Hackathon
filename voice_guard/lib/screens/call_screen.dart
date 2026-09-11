@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../providers/call_state_provider.dart';
@@ -11,7 +12,6 @@ import '../services/notification_service.dart';
 import '../widgets/shad_risk_meter.dart';
 import '../widgets/shad_waveform.dart';
 import '../widgets/shad_glass_card.dart';
-import '../widgets/shad_glass_scaffold.dart';
 import '../widgets/shad_badge.dart';
 import '../widgets/shad_button.dart';
 import '../design/tokens.dart';
@@ -281,50 +281,49 @@ class _CallScreenState extends State<CallScreen> {
     final color = risk?.color ?? ShadRiskMeter.colorFor(score);
     final scoringHasSignal = riskProvider.hasSignal;
 
-    return ShadGlassScaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        title: Text(
-          isCallInProgress ? 'Acoustic Defense Monitor' : 'Dialer & Live Detection',
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.3,
-            color: ShadTokens.foreground,
-          ),
-        ),
-        actions: [
-          IconButton(
-            tooltip: _liveMicActive ? 'Stop Live Mic' : 'Live Mic Acoustic Test',
-            icon: Container(
-              padding: const EdgeInsets.all(7),
-              decoration: BoxDecoration(
-                color: _liveMicActive ? ShadTokens.destructive : const Color(0xFFF4F4F5),
-                borderRadius: BorderRadius.circular(ShadTokens.radiusMd),
-                border: Border.all(color: _liveMicActive ? ShadTokens.destructive : ShadTokens.border),
+    return Scaffold(
+      backgroundColor: const Color(0xFF09090B),
+      appBar: isCallInProgress
+          ? AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              scrolledUnderElevation: 0,
+              title: Text(
+                'Acoustic Defense Monitor',
+                style: GoogleFonts.inter(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
               ),
-              child: Icon(
-                _liveMicActive ? LucideIcons.square : LucideIcons.mic,
-                size: 17,
-                color: _liveMicActive ? Colors.white : ShadTokens.foreground,
-              ),
-            ),
-            onPressed: _toggleLiveMic,
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: isCallInProgress
-          ? _buildActiveCallView(
-              call: call,
-              score: score,
-              verdict: verdict,
-              color: color,
-              scoringHasSignal: scoringHasSignal,
+              actions: [
+                IconButton(
+                  tooltip: 'Stop Live Monitor',
+                  icon: Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFF6268),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(LucideIcons.square, size: 16, color: Colors.white),
+                  ),
+                  onPressed: _toggleLiveMic,
+                ),
+                const SizedBox(width: 8),
+              ],
             )
-          : _buildDialpadView(),
+          : null,
+      body: SafeArea(
+        child: isCallInProgress
+            ? _buildActiveCallView(
+                call: call,
+                score: score,
+                verdict: verdict,
+                color: color,
+                scoringHasSignal: scoringHasSignal,
+              )
+            : _buildDialpadView(),
+      ),
     );
   }
 
@@ -593,41 +592,65 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   // ── VIEW 2: INTERACTIVE DIALPAD ──
+  // ── VIEW 2: INTERACTIVE DIALPAD (FIGMA MAIN-1.PNG) ──
   Widget _buildDialpadView() {
     return Column(
       children: [
-        if (!_isDefaultDialer)
-          ShadGlassCard(
-            margin: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            child: Row(
-              children: [
-                const Icon(LucideIcons.shield, color: ShadTokens.primary, size: 18),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Set as Default Phone App',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: ShadTokens.foreground),
-                      ),
-                      Text(
-                        'Enables native call interception via InCallService',
-                        style: TextStyle(fontSize: 10, color: ShadTokens.muted),
-                      ),
-                    ],
+        const SizedBox(height: 16),
+        // ── Top Pill Header: Zero-Trust Interception | ✓ Active ──
+        Center(
+          child: GestureDetector(
+            onTap: _isDefaultDialer ? null : _requestDefaultDialer,
+            child: Container(
+              padding: const EdgeInsets.only(left: 18, right: 6, top: 6, bottom: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF18181B),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: const Color(0xFF27272A)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Zero-Trust Interception',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: const Color(0xFFD4D4D8),
+                    ),
                   ),
-                ),
-                ShadButton(
-                  onTap: _requestDefaultDialer,
-                  variant: ShadButtonVariant.primary,
-                  size: ShadButtonSize.sm,
-                  text: 'Enable',
-                ),
-              ],
+                  const SizedBox(width: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF131315),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _isDefaultDialer ? LucideIcons.check : LucideIcons.shieldAlert,
+                          size: 12,
+                          color: _isDefaultDialer ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _isDefaultDialer ? 'Active' : 'Set Default',
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: _isDefaultDialer ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
+        ),
 
         // ── Number Display Box ──
         Expanded(
@@ -639,20 +662,24 @@ class _CallScreenState extends State<CallScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  _dialNumber.isEmpty ? 'Enter Number' : _dialNumber,
-                  style: TextStyle(
-                    fontSize: _dialNumber.length > 10 ? 28 : 34,
-                    fontWeight: FontWeight.w800,
-                    color: _dialNumber.isEmpty ? ShadTokens.mutedFg : ShadTokens.foreground,
-                    letterSpacing: 1.5,
+                  _dialNumber.isEmpty ? '+91 98450 ...' : _dialNumber,
+                  style: GoogleFonts.inter(
+                    fontSize: _dialNumber.length > 12 ? 26 : 32,
+                    fontWeight: FontWeight.w700,
+                    color: _dialNumber.isEmpty ? const Color(0xFF71717A) : Colors.white,
+                    letterSpacing: 1.2,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 6),
-                const Text(
-                  'Monitored via on-device ONNX Runtime inference',
-                  style: TextStyle(fontSize: 11, color: ShadTokens.muted),
+                Text(
+                  'On-Device Inference Active',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w400,
+                    color: const Color(0xFF71717A),
+                  ),
                 ),
               ],
             ),
@@ -678,54 +705,59 @@ class _CallScreenState extends State<CallScreen> {
 
         // ── Action Bar: Live Mic, Call, Backspace ──
         Padding(
-          padding: const EdgeInsets.only(bottom: 24, left: 32, right: 32),
+          padding: const EdgeInsets.only(bottom: 28, left: 36, right: 36),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               // Live Mic mode button
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF4F4F5),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: ShadTokens.border),
-                ),
-                child: IconButton(
-                  tooltip: 'Start Live Mic Acoustic Test',
-                  icon: const Icon(LucideIcons.mic, size: 22, color: ShadTokens.foreground),
-                  onPressed: _toggleLiveMic,
+              InkWell(
+                onTap: _toggleLiveMic,
+                borderRadius: BorderRadius.circular(32),
+                child: Container(
+                  width: 62,
+                  height: 62,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF1C1C1E),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(LucideIcons.mic, size: 22, color: Colors.white),
                 ),
               ),
 
-              // Large Call Button
+              // Large Call Button (Emerald Green - Figma #00C274)
               GestureDetector(
                 onTap: _startOutgoingCall,
                 child: Container(
-                  width: 64,
-                  height: 64,
+                  width: 68,
+                  height: 68,
                   decoration: const BoxDecoration(
-                    color: ShadTokens.verified,
+                    color: Color(0xFF00C274),
                     shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Color(0x3300C274),
+                        blurRadius: 14,
+                        offset: Offset(0, 4),
+                      ),
+                    ],
                   ),
-                  child: const Icon(LucideIcons.phoneCall, color: Colors.white, size: 28),
+                  child: const Icon(LucideIcons.phone, color: Colors.white, size: 28),
                 ),
               ),
 
               // Backspace button
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF4F4F5),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: ShadTokens.border),
-                ),
-                child: IconButton(
-                  tooltip: 'Delete',
-                  icon: const Icon(LucideIcons.delete, size: 20, color: ShadTokens.foreground),
-                  onPressed: _onBackspace,
-                  onLongPress: () => setState(() => _dialNumber = ''),
+              InkWell(
+                onTap: _onBackspace,
+                onLongPress: () => setState(() => _dialNumber = ''),
+                borderRadius: BorderRadius.circular(32),
+                child: Container(
+                  width: 62,
+                  height: 62,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF1C1C1E),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(LucideIcons.delete, size: 22, color: Color(0xFF8E9192)),
                 ),
               ),
             ],
@@ -750,31 +782,30 @@ class _CallScreenState extends State<CallScreen> {
       onLongPress: digit == '0' ? () => _onDigitPress('+') : null,
       borderRadius: BorderRadius.circular(40),
       child: Container(
-        width: 68,
-        height: 68,
-        decoration: BoxDecoration(
-          color: Colors.white,
+        width: 70,
+        height: 70,
+        decoration: const BoxDecoration(
+          color: Color(0xFF1C1C1E),
           shape: BoxShape.circle,
-          border: Border.all(color: ShadTokens.border),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
               digit,
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.w700,
-                color: ShadTokens.foreground,
+              style: GoogleFonts.inter(
+                fontSize: 26,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
               ),
             ),
             if (sub.isNotEmpty)
               Text(
                 sub,
-                style: const TextStyle(
-                  fontSize: 8,
+                style: GoogleFonts.inter(
+                  fontSize: 9,
                   fontWeight: FontWeight.w600,
-                  color: ShadTokens.muted,
+                  color: const Color(0xFF71717A),
                   letterSpacing: 1.0,
                 ),
               ),

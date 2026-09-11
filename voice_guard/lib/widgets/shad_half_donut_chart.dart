@@ -1,9 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
-import '../design/tokens.dart';
-import 'shad_glass_card.dart';
 
 /// A world-class Apple/shadcn minimalist half-donut chart displaying total analyzed calls
 /// with an elegant arc, centered digital readout, segmented distribution bar, and monochromatic legends.
@@ -67,260 +64,149 @@ class _ShadHalfDonutChartState extends State<ShadHalfDonutChart>
     final humanRatio = (widget.humanCount / safeTotal).clamp(0.0, 1.0);
     final aiRatio = (widget.aiCount / safeTotal).clamp(0.0, 1.0);
 
-    return ShadGlassCard(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+    return GestureDetector(
       onTap: widget.onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // ── Half-Donut Arc with Centered Overlay Readout ──
-          SizedBox(
-            width: double.infinity,
-            height: 155,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                // Animated Custom Paint Arc
-                Positioned.fill(
-                  child: AnimatedBuilder(
-                    animation: _animation,
-                    builder: (context, child) {
-                      return CustomPaint(
-                        painter: _AppleHalfDonutPainter(
-                          progress: _animation.value,
-                          humanRatio: humanRatio,
-                          aiRatio: aiRatio,
-                        ),
-                      );
-                    },
-                  ),
-                ),
-
-                // Centered Metric Display
-                Positioned(
-                  bottom: 10,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Big bold count with Inter font
-                      Text(
-                        '$total',
-                        style: GoogleFonts.inter(
-                          fontSize: 38,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -1.5,
-                          height: 1.0,
-                          color: ShadTokens.foreground,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        'CALLS ANALYZED',
-                        style: GoogleFonts.inter(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.4,
-                          color: ShadTokens.muted,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      // Pill status badge
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF4F4F5),
-                          borderRadius: BorderRadius.circular(ShadTokens.radiusFull),
-                          border: Border.all(color: ShadTokens.border),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 6,
-                              height: 6,
-                              decoration: const BoxDecoration(
-                                color: Color(0xFF10B981),
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 5),
-                            Text(
-                              '${(humanRatio * 100).toInt()}% Authentic',
-                              style: GoogleFonts.inter(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                color: ShadTokens.foreground,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 18),
-
-          // ── Segmented Distribution Bar (Apple Storage / Battery Style) ──
-          ClipRRect(
-            borderRadius: BorderRadius.circular(ShadTokens.radiusFull),
-            child: Container(
-              height: 6,
+      child: Container(
+        color: Colors.transparent,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // ── Half-Donut Arc with Centered Digital Readout ──
+            SizedBox(
               width: double.infinity,
-              color: const Color(0xFFF4F4F5),
-              child: Row(
+              height: 165,
+              child: Stack(
+                alignment: Alignment.center,
                 children: [
-                  Expanded(
-                    flex: (humanRatio * 1000).toInt().clamp(1, 1000),
-                    child: Container(color: const Color(0xFF10B981)),
-                  ),
-                  if (aiRatio > 0) const SizedBox(width: 2),
-                  if (aiRatio > 0)
-                    Expanded(
-                      flex: (aiRatio * 1000).toInt().clamp(1, 1000),
-                      child: Container(color: const Color(0xFFEF4444)),
+                  Positioned.fill(
+                    child: AnimatedBuilder(
+                      animation: _animation,
+                      builder: (context, child) {
+                        return CustomPaint(
+                          painter: _AppleHalfDonutPainter(
+                            progress: _animation.value,
+                            humanRatio: humanRatio,
+                            aiRatio: aiRatio,
+                          ),
+                        );
+                      },
                     ),
+                  ),
+
+                  // Centered Metric Display
+                  Positioned(
+                    bottom: 12,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '$total',
+                          style: GoogleFonts.inter(
+                            fontSize: 48,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -1.8,
+                            height: 1.0,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'TOTAL CELLS SCANNED',
+                          style: GoogleFonts.inter(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.2,
+                            color: const Color(0xFF8E9192),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
-          ),
 
-          const SizedBox(height: 14),
+            const SizedBox(height: 16),
 
-          // ── Monochromatic Legend Metric Cards ──
-          Row(
-            children: [
-              // Human Proportion Card
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(ShadTokens.radiusMd),
-                    border: Border.all(color: ShadTokens.border),
-                  ),
-                  child: Row(
+            // ── Legend Below Arc: ● 138 AUTHENTIC | ● 10 AI CLONES ──
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Left: Authentic
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF4F4F5),
-                          borderRadius: BorderRadius.circular(ShadTokens.radiusSm),
-                          border: Border.all(color: ShadTokens.border),
-                        ),
-                        child: const Icon(
-                          LucideIcons.userCheck,
-                          size: 16,
-                          color: ShadTokens.foreground,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Human',
-                              style: GoogleFonts.inter(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                color: ShadTokens.muted,
-                              ),
-                            ),
-                            const SizedBox(height: 1),
-                            Text(
-                              '${widget.humanCount} (${(humanRatio * 100).toInt()}%)',
-                              style: GoogleFonts.inter(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: ShadTokens.foreground,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        width: 6,
-                        height: 6,
+                        width: 8,
+                        height: 8,
                         decoration: const BoxDecoration(
-                          color: Color(0xFF10B981),
+                          color: Color(0xFF21D4B2),
                           shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${widget.humanCount}',
+                        style: GoogleFonts.inter(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          color: const Color(0xFF21D4B2),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'AUTHENTIC',
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.8,
+                          color: const Color(0xFF8E9192),
                         ),
                       ),
                     ],
                   ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              // AI Voice Proportion Card
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(ShadTokens.radiusMd),
-                    border: Border.all(color: ShadTokens.border),
-                  ),
-                  child: Row(
+
+                  // Right: AI Clones
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF4F4F5),
-                          borderRadius: BorderRadius.circular(ShadTokens.radiusSm),
-                          border: Border.all(color: ShadTokens.border),
-                        ),
-                        child: const Icon(
-                          LucideIcons.bot,
-                          size: 16,
-                          color: ShadTokens.foreground,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'AI Voice',
-                              style: GoogleFonts.inter(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                color: ShadTokens.muted,
-                              ),
-                            ),
-                            const SizedBox(height: 1),
-                            Text(
-                              '${widget.aiCount} (${(aiRatio * 100).toInt()}%)',
-                              style: GoogleFonts.inter(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: const Color(0xFFEF4444),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        width: 6,
-                        height: 6,
+                        width: 8,
+                        height: 8,
                         decoration: const BoxDecoration(
-                          color: Color(0xFFEF4444),
+                          color: Color(0xFFFF6268),
                           shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${widget.aiCount}',
+                        style: GoogleFonts.inter(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          color: const Color(0xFFFF6268),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'AI CLONES',
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.8,
+                          color: const Color(0xFF8E9192),
                         ),
                       ),
                     ],
                   ),
-                ),
+                ],
               ),
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -337,48 +223,47 @@ class _AppleHalfDonutPainter extends CustomPainter {
     required this.aiRatio,
   });
 
-  // 180° semi-circle arc spanning from left (pi) to right (2*pi / 0)
   static const double _startAngle = math.pi;
   static const double _sweepAngle = math.pi;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height * 0.98);
-    final radius = math.min(size.width * 0.40, 110.0);
-    const strokeWidth = 16.0;
+    final center = Offset(size.width / 2, size.height * 0.96);
+    final radius = math.min(size.width * 0.38, 115.0);
+    const strokeWidth = 20.0;
 
     final arcRect = Rect.fromCircle(center: center, radius: radius);
 
     // 1. Subtle Background track
     final trackPaint = Paint()
-      ..color = const Color(0xFFE4E4E7)
+      ..color = const Color(0xFF1C1C1E)
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round;
 
     canvas.drawArc(arcRect, _startAngle, _sweepAngle, false, trackPaint);
 
-    // 2. Human Segment (Emerald Green)
+    // 2. Human Segment (Teal - #21D4B2)
     final humanSweep = _sweepAngle * humanRatio * progress;
     if (humanRatio > 0 && humanSweep > 0) {
       final humanPaint = Paint()
-        ..color = const Color(0xFF10B981)
+        ..color = const Color(0xFF21D4B2)
         ..style = PaintingStyle.stroke
         ..strokeWidth = strokeWidth
-        ..strokeCap = aiRatio > 0 ? StrokeCap.round : StrokeCap.round;
+        ..strokeCap = StrokeCap.round;
 
       canvas.drawArc(arcRect, _startAngle, humanSweep, false, humanPaint);
     }
 
-    // 3. AI Voice Segment (Red)
+    // 3. AI Voice Segment (Coral - #FF6268)
     final aiSweep = _sweepAngle * aiRatio * progress;
     if (aiRatio > 0 && aiSweep > 0) {
-      const gap = 0.04; // small clean gap in radians
+      const gap = 0.05;
       final aiStart = _startAngle + humanSweep + gap;
       final adjustedSweep = math.max(0.0, aiSweep - gap);
 
       final aiPaint = Paint()
-        ..color = const Color(0xFFEF4444)
+        ..color = const Color(0xFFFF6268)
         ..style = PaintingStyle.stroke
         ..strokeWidth = strokeWidth
         ..strokeCap = StrokeCap.round;

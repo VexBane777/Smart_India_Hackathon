@@ -10,64 +10,70 @@ class ShadTokens {
   static const Color white = Color(0xFFFFFFFF);
   static const Color black = Color(0xFF000000);
 
-  // Backgrounds & Surfaces
-  static const Color background = Color(0xFFFAFAFA);
-  static const Color surface = Color(0xFFFFFFFF);
-  static const Color foreground = Color(0xFF09090B);
+  // Backgrounds & Surfaces (Figma Obsidian / Dark Zinc)
+  static const Color background = Color(0xFF131315);
+  static const Color surface = Color(0xFF18181B);
+  static const Color surfaceContainer = Color(0xFF1C1C1E);
+  static const Color foreground = Color(0xFFFFFFFF);
 
   // Cards & Popovers
-  static const Color card = Color(0xFFFFFFFF);
-  static const Color cardFg = Color(0xFF09090B);
-  static const Color popover = Color(0xFFFFFFFF);
-  static const Color popoverFg = Color(0xFF09090B);
+  static const Color card = Color(0xFF18181B);
+  static const Color cardFg = Color(0xFFFFFFFF);
+  static const Color popover = Color(0xFF18181B);
+  static const Color popoverFg = Color(0xFFFFFFFF);
 
-  // Primary (Zinc-900) & Secondary (Zinc-100)
-  static const Color primary = Color(0xFF18181B);
-  static const Color primaryFg = Color(0xFFFAFAFA);
-  static const Color secondary = Color(0xFFF4F4F5);
-  static const Color secondaryFg = Color(0xFF18181B);
+  // Primary (White) & Secondary (Zinc-800)
+  static const Color primary = Color(0xFFFFFFFF);
+  static const Color primaryFg = Color(0xFF000000);
+  static const Color secondary = Color(0xFF27272A);
+  static const Color secondaryFg = Color(0xFFFFFFFF);
 
-  // Muted & Accents
-  static const Color muted = Color(0xFF71717A);
-  static const Color mutedFg = Color(0xFFA1A1AA);
-  static const Color mutedBg = Color(0xFFF4F4F5);
-  static const Color accent = Color(0xFFF4F4F5);
-  static const Color accentFg = Color(0xFF18181B);
+  // Muted & Accents (Figma Slate/Zinc)
+  static const Color muted = Color(0xFF8E9192);
+  static const Color mutedFg = Color(0xFF71717A);
+  static const Color mutedBg = Color(0xFF1C1C1E);
+  static const Color accent = Color(0xFF27272A);
+  static const Color accentFg = Color(0xFFFFFFFF);
 
   // Borders & Inputs
-  static const Color border = Color(0xFFE4E4E7);
-  static const Color input = Color(0xFFE4E4E7);
-  static const Color ring = Color(0xFF18181B);
+  static const Color border = Color(0xFF27272A);
+  static const Color input = Color(0xFF27272A);
+  static const Color ring = Color(0xFF21D4B2);
 
-  // Destructive (Red-600)
-  static const Color destructive = Color(0xFFDC2626);
+  // Destructive (Red-500 / Coral)
+  static const Color destructive = Color(0xFFFF6268);
   static const Color destructiveFg = Color(0xFFFFFFFF);
-  static const Color destructiveBg = Color(0xFFFEF2F2);
-  static const Color destructiveBorder = Color(0xFFFECACA);
+  static const Color destructiveBg = Color(0xFF2A1517);
+  static const Color destructiveBorder = Color(0xFF521B21);
 
-  // ── VoiceGuard Semantic Accents (DPDP & Risk Detection) ─────────────
-  // Verified Human (Green-600)
-  static const Color verified = Color(0xFF16A34A);
-  static const Color verifiedFg = Color(0xFFFFFFFF);
-  static const Color verifiedBg = Color(0xFFF0FDF4);
-  static const Color verifiedBorder = Color(0xFFBBF7D0);
+  // ── VoiceGuard Semantic Accents (Figma Palette) ─────────────────────
+  // Authentic Voice (Cyan/Teal - #21D4B2)
+  static const Color teal = Color(0xFF21D4B2);
+  static const Color verified = Color(0xFF21D4B2);
+  static const Color verifiedFg = Color(0xFF000000);
+  static const Color verifiedBg = Color(0xFF0D2824);
+  static const Color verifiedBorder = Color(0xFF154F46);
 
-  // Suspicious (Amber-600)
-  static const Color suspicious = Color(0xFFD97706);
-  static const Color suspiciousFg = Color(0xFFFFFFFF);
-  static const Color suspiciousBg = Color(0xFFFFFBEB);
-  static const Color suspiciousBorder = Color(0xFFFDE68A);
-
-  // AI Detected (Red-600)
-  static const Color detected = Color(0xFFDC2626);
+  // Coral / AI Clones (#FF6268)
+  static const Color coral = Color(0xFFFF6268);
+  static const Color detected = Color(0xFFFF6268);
   static const Color detectedFg = Color(0xFFFFFFFF);
-  static const Color detectedBg = Color(0xFFFEF2F2);
-  static const Color detectedBorder = Color(0xFFFECACA);
+  static const Color detectedBg = Color(0xFF2C1618);
+  static const Color detectedBorder = Color(0xFF5A1E24);
 
-  // Info (Blue-600)
-  static const Color info = Color(0xFF2563EB);
-  static const Color infoBg = Color(0xFFEFF6FF);
-  static const Color infoBorder = Color(0xFFBFDBFE);
+  // Suspicious (Amber-500)
+  static const Color suspicious = Color(0xFFF59E0B);
+  static const Color suspiciousFg = Color(0xFF000000);
+  static const Color suspiciousBg = Color(0xFF2B200E);
+  static const Color suspiciousBorder = Color(0xFF523C13);
+
+  // Call Button Active Green (#00C274 / #10B981)
+  static const Color callGreen = Color(0xFF00C274);
+
+  // Info (Blue-500)
+  static const Color info = Color(0xFF3B82F6);
+  static const Color infoBg = Color(0xFF132338);
+  static const Color infoBorder = Color(0xFF1E3A5F);
 
   // ── Radii ────────────────────────────────────────────────────────────
   static const double radiusSm = 6.0;
