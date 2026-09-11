@@ -1610,6 +1610,23 @@ always straddle val_fraction=0.34 (~1-in-130 flake; now sweeps split seeds
 until both sides populate); `check_corpus.py`'s --min-yield help text still
 said ">=3s" under the new 1 s cutoff.
 
+**Select-split baseline result (v9 + v11 re-scored on the new protocol,
+items 1–5 answered for the deployed model):** on the `select` half of the
+committed split, pooled over phone channels (34,140 windows / 3,734 files):
+v9 headline EER = 0.5013 [0.4926, 0.5115], v11 = 0.4800 [0.4714, 0.4883] —
+**both at chance, both FAIL the confound gates**. Per channel, v11: none
+0.0708 (its documented clean-audio number, reproducing), whatsapp 0.4608,
+volte 0.4476, cellular_3g 0.4669, gsm_2g 0.5008, pstn 0.4838,
+tandem_xnet 0.4937. **The deployed v11 model does not detect AI voice on
+phone-channel audio at all** — its accuracy lives entirely in clean-audio
+signatures the channel removes. v9 (clean-trained MLP) is at chance even on
+`none` (0.2089 there, chance pooled) under the confound gates. This is the
+single most important number in the v12 effort so far: the user's clean-only-
+eval policy was not pedantry, it was hiding that the product does not work
+as a phone-call detector yet. v12 (trained with phone channels in the loop)
+is now the earliest candidate to actually beat chance on calls — see
+runs/eval_v9_v11_select/report.md for the full table.
+
 **Not done here, deliberately:** the deploy decision (item I). It gates on
 the report: v12 must pass the confound gates AND beat v11 on the test
 headline EER. If the attack-type head fails its gates (leave-attack-out
