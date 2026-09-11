@@ -1,0 +1,5 @@
+Per-source-directory yield (files in -> files surviving >=3s chunking -> windows out):
+  C:\Users\Tuviksh Murudkar\SIH\voice_guard\model_training\data\real_itw_held: 4438 in -> 2045 survived (46%) -> 3076 windows  <-- >50% of files produced ZERO training examples
+pauseRatio: low-half mean fake-prob=0.078  high-half=0.106  gap=0.028
+energyVariance: low-half mean fake-prob=0.091  high-half=0.093  gap=0.002
+zcrVariance: low-half mean fake-prob=0.089  high-half=0.095  gap=0.005
