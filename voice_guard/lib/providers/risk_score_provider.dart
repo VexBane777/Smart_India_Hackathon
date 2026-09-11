@@ -72,62 +72,7 @@ class RiskScoreProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  final List<CallLog> _callLogs = [
-    CallLog(
-      id: 'log-001',
-      timestamp: DateTime.now().subtract(const Duration(hours: 2, minutes: 12)),
-      number: '+91 98450 12891',
-      riskScore: 0.94,
-      verdict: Verdict.detected,
-      duration: const Duration(minutes: 1, seconds: 14),
-      recordingPath: '/sandboxed/recordings/call_20260910_12891_threat.wav',
-    ),
-    CallLog(
-      id: 'log-002',
-      timestamp: DateTime.now().subtract(const Duration(hours: 5, minutes: 40)),
-      number: '+91 80234 56789',
-      riskScore: 0.08,
-      verdict: Verdict.verified,
-      duration: const Duration(minutes: 4, seconds: 32),
-      recordingPath: '/sandboxed/recordings/call_20260910_56789_clean.wav',
-    ),
-    CallLog(
-      id: 'log-003',
-      timestamp: DateTime.now().subtract(const Duration(days: 1, hours: 3)),
-      number: 'WhatsApp Audio (VoIP)',
-      riskScore: 0.72,
-      verdict: Verdict.detected,
-      duration: const Duration(seconds: 48),
-      recordingPath: '/sandboxed/recordings/voip_whatsapp_clone.wav',
-    ),
-    CallLog(
-      id: 'log-004',
-      timestamp: DateTime.now().subtract(const Duration(days: 1, hours: 8)),
-      number: '+91 91234 56780',
-      riskScore: 0.42,
-      verdict: Verdict.suspicious,
-      duration: const Duration(minutes: 2, seconds: 15),
-      recordingPath: null,
-    ),
-    CallLog(
-      id: 'log-005',
-      timestamp: DateTime.now().subtract(const Duration(days: 2, hours: 1)),
-      number: '+91 98765 43210',
-      riskScore: 0.06,
-      verdict: Verdict.verified,
-      duration: const Duration(minutes: 5, seconds: 20),
-      recordingPath: null,
-    ),
-    CallLog(
-      id: 'log-006',
-      timestamp: DateTime.now().subtract(const Duration(days: 3)),
-      number: 'Live Acoustic Mic Test',
-      riskScore: 0.04,
-      verdict: Verdict.verified,
-      duration: const Duration(seconds: 25),
-      recordingPath: null,
-    ),
-  ];
+  final List<CallLog> _callLogs = [];
   List<CallLog> get callLogs => List.unmodifiable(_callLogs);
 
   void addCallLog(CallLog log) {
