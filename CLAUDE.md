@@ -80,6 +80,16 @@ data, not fixable by retraining on more/different data. This is the single
 most important open concern for whoever works on the model next, on any
 device.
 
+**Every model evaluation, checkpoint selection and training run is governed
+by `voice_guard/docs/EVAL-PROTOCOL.md`** (v12, 2026-09-11): the channel
+policy (no clean-only eval/training unless `--application bank`), the
+committed `select`/`test` held-out split (selection may read `select` only),
+windowing, the feature cache, the metrics/deploy gates, and the one eval
+harness (`evaluate.py`). The code enforces it (`eval_protocol.py` +
+`test_eval_protocol.py`); if you change the protocol, change doc, code and
+tests together.
+device.
+
 ## Open / unresolved — Module A "final scoped re-review"
 
 A user request came in to: adjudicate a "Module A final scoped re-review"

@@ -83,36 +83,22 @@ manifest is not, and is the intended durable record of what's been collected.
    early on, `en_native` with just your own recordings) goes entirely to
    `train` rather than losing its only speaker to `held`.
 
-6. **`../eval_accent_cells.py`** (repo root, not in `data/`) — per-cell EER
-   against `accents_split/held/`, instead of one aggregate number that can't
-   tell you *which* cell (e.g. `hi_foreign`) a model is still weak on:
-   ```
-   python ../eval_accent_cells.py --model runs/voice_guard_v3/model.pt
-   ```
+6. **Per-cell evaluation**: `../evaluate.py` scores the held accent cells
+   (`accents_split/held/`, capped at 300 files each, test split only) as
+   their own eval sets under the channel protocol, with FPR/FNR per cell and
+   EER for cells that have both real and fake. `eval_accent_cells.py` was
+   retired 2026-09-11 (it was broken and clean-only). See
+   `../../docs/EVAL-PROTOCOL.md`.
 
 ### Folding into training
 
-Once `data/accents_split/train/` has real content, add it to `train.py` as
-additional clean (undegraded) dirs — no code change needed, `--real-clean`/
-`--fake-clean` already accept multiple directories:
-
-```
-python train.py --real data/real --fake data/fake \
-    --real-clean data/real2021 data/real_itw_train \
-        data/accents_split/train/real/en_native data/accents_split/train/real/en_foreign \
-        data/accents_split/train/real/hi_native data/accents_split/train/real/hi_foreign \
-    --fake-clean data/fake2021 data/fake_itw_train \
-        data/accents_split/train/fake/en_native data/accents_split/train/fake/en_foreign \
-        data/accents_split/train/fake/hi_native data/accents_split/train/fake/hi_foreign \
-    --out runs/voice_guard_v4 --epochs 30 --channel whatsapp volte --device auto --workers 8
-```
-
-Accent cells go in `--*-clean` (no `--channel` degradation) alongside
-ASVspoof2021/In-the-Wild, on the same reasoning already documented for
-those: Common Voice clips, self-recordings, and XTTS clones are either
-already realistic (your own live-mic recordings) or not meaningfully more
-realistic after a synthetic channel pass (Common Voice/XTTS studio-ish
-audio) — revisit this if `eval_accent_cells.py` shows it mattered.
+The accent cells are **not** in the v12 training corpus
+(`../corpus.py::TRAIN_SETS_V12`). v6 trained on them and regressed, and
+their held splits now serve as an Indian-accent generalization check. To
+add them, append `SetDef`s to a new corpus tuple in `corpus.py`. Training
+then renders them through `none` plus one phone channel like every other
+set. There is no longer a "clean-only" training path (policy:
+EVAL-PROTOCOL.md §1).
 
 ## Known caveats
 
@@ -127,8 +113,6 @@ audio) — revisit this if `eval_accent_cells.py` shows it mattered.
   a starting guess, not derived from an experiment — revisit once the next
   subsystem (training-pipeline extension) shows what actually moves held-out
   EER per cell.
-- `split_accents.py`/`eval_accent_cells.py` and the `train.py` invocation
-  above are smoke-tested (synthetic multi-speaker WAVs, verified the
-  speaker-disjoint split and per-cell EER report both work mechanically) but
-  not run against real accent data yet — that still needs steps 1-4 actually
-  executed on the GPU machine first.
+- The accent cells carry known shortcut history (sample-rate and silence
+  confounds, fixed 2026-09-10; see `../test_dataset_integrity.py`). Treat
+  per-cell results as a check, not a leaderboard.

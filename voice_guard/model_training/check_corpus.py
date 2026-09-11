@@ -2,9 +2,11 @@
 Preflight gate: run this BEFORE launching a long train.py job, not after.
 
 Checks, cheaply (header reads / small samples, no full feature extraction):
-  1. Per-directory chunk-yield estimate — what fraction of files in each dir
-     will actually survive chunk_audio's 3s-minimum cutoff (see dataset.py's
-     report_yield / features.py's chunk_audio docstring).
+  1. Per-directory yield estimate: what fraction of files is long enough
+     (>= dataset.MIN_CLIP_SECONDS = 1 s) to yield a window under the v12
+     windowing contract (dataset.py docstring). Before v12 the cutoff was 3 s
+     and ~74% of training files yielded nothing. The real per-file outcome
+     is recorded in every feature-cache manifest.
   2. Technical-shortcut scan on every real/fake directory pair you pass in
      (see dataset_audit.py) — catches e.g. one class being a single TTS
      engine's native sample rate in disguise.
@@ -36,8 +38,11 @@ from dataset_audit import audit_directory_pair
 
 
 def estimate_yield(directory: Path, sample_n: int = 300, seed: int = 0) -> tuple[int, float]:
-    """Returns (n_files, fraction surviving chunk_audio's >=3s cutoff),
-    estimated from a header-only sample (fast: no audio decode)."""
+    """Returns (n_files, fraction at or above MIN_CLIP_SECONDS), estimated
+    from a header-only sample (fast: no audio decode; edge trimming can
+    shorten a clip slightly, so this is an upper bound)."""
+    from dataset import MIN_CLIP_SECONDS
+
     files = sorted(Path(directory).glob("*.wav"))
     if not files:
         return 0, float("nan")
@@ -45,7 +50,7 @@ def estimate_yield(directory: Path, sample_n: int = 300, seed: int = 0) -> tuple
     survived = 0
     for f in sample:
         try:
-            if sf.info(str(f)).duration >= 3.0:
+            if sf.info(str(f)).duration >= MIN_CLIP_SECONDS:
                 survived += 1
         except Exception:
             pass
@@ -57,7 +62,7 @@ def main() -> None:
     ap.add_argument("--pair", nargs=2, metavar=("REAL_DIR", "FAKE_DIR"), action="append", default=[],
                      help="a real/fake directory pair to audit; repeatable.")
     ap.add_argument("--min-yield", type=float, default=0.15,
-                     help="warn if a directory's estimated >=3s-survival fraction is below this.")
+                     help="warn if a directory's estimated >=1s-survival fraction is below this.")
     args = ap.parse_args()
 
     if not args.pair:
@@ -69,7 +74,7 @@ def main() -> None:
         for label, d in (("real", real_dir), ("fake", fake_dir)):
             n, frac = estimate_yield(d)
             flag = "  <-- LOW YIELD" if frac < args.min_yield else ""
-            print(f"  [{label}] {d}: {n} files, ~{frac:.0%} survive >=3s chunking{flag}")
+            print(f"  [{label}] {d}: {n} files, ~{frac:.0%} long enough to window (>=1 s){flag}")
             if frac < args.min_yield:
                 had_issue = True
 

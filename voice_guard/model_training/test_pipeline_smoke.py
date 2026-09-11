@@ -3,8 +3,8 @@ Smoke test for the training pipeline's mechanics — shapes, dtypes, ONNX
 export round-tripping — using SYNTHETIC audio (sine tones vs. filtered
 noise as real/fake stand-ins). This does NOT validate detection accuracy;
 it only proves the code runs end-to-end before pointing it at a real
-corpus. Real accuracy validation happens on ASVspoof (see train.py's
-docstring).
+corpus. Real accuracy validation happens under the channel protocol — see
+../docs/EVAL-PROTOCOL.md and evaluate.py (train.py was retired 2026-09-11).
 
 For corpus-composition/data-integrity issues this suite structurally can't
 see (uneven chunk-yield across sources, technical shortcuts like a
@@ -61,11 +61,19 @@ def test_build_examples_and_to_arrays_produce_sequence_shaped_dataset(tmp_path: 
     tmp_path = tmp_path or Path(tempfile.mkdtemp())
     real_dir, fake_dir = _write_synthetic_corpus(tmp_path)
 
-    examples = build_examples(real_dir, fake_dir)
+    examples = build_examples(real_dir, fake_dir, channel_recipes=[None], workers=1)
     assert len(examples) > 0
-    train_ex, val_ex = split_by_source(examples, val_fraction=0.34)
+    train_ex, val_ex = [], []
+    for seed in range(10):
+        # A 12-file toy corpus doesn't always straddle val_fraction=0.34
+        # (P(all 12 on the train side) ~ 0.8% by hash luck); sweep seeds
+        # until both sides are populated. The contract under test is
+        # source-disjointness and shapes, not this particular hash.
+        train_ex, val_ex = split_by_source(examples, val_fraction=0.34, seed=seed)
+        if train_ex and val_ex:
+            break
     assert train_ex and val_ex
-    assert {e.source_file for e in train_ex} & {e.source_file for e in val_ex} == set()
+    assert {e.file_id for e in train_ex} & {e.file_id for e in val_ex} == set()
 
     X_seq, X_scalars, y_train, attack_y = to_arrays(train_ex)
     assert X_seq.shape[0] == len(train_ex)
