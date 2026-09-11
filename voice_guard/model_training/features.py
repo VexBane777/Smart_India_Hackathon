@@ -78,6 +78,27 @@ def extract_lfcc(pcm: np.ndarray) -> np.ndarray:
     return (mean - m) / std
 
 
+def extract_lfcc_sequence(pcm: np.ndarray) -> np.ndarray:
+    """3s (or shorter) PCM float buffer -> (n_frames, 60) per-frame LFCC
+    matrix, unpooled — same math as extract_lfcc up to (and not including)
+    the final mean-pool + normalize step. Used by the frame-level CNN
+    (VoiceGuardSeqCNN); extract_lfcc is kept for anything not yet migrated
+    to the sequence model."""
+    if len(pcm) < FFT_SIZE:
+        return np.zeros((0, N_LFCC), dtype=np.float64)
+    frames = _hamming(_frame_signal(pcm))
+    mag = _magnitude_spectrum(frames)
+    energies = _linear_filterbank(mag)
+    log_e = np.log(energies + 1e-10)
+    return _dct2_orthonormal(log_e)[:, :N_LFCC]
+
+
+def extract_scalars(pcm: np.ndarray) -> np.ndarray:
+    """3s PCM float buffer -> 6 scalars: 3 prosody + 3 physio, in that
+    order. Used as the scalar branch input to VoiceGuardSeqCNN."""
+    return np.concatenate([extract_prosody(pcm), extract_physio(pcm)]).astype(np.float64)
+
+
 def extract_prosody(pcm: np.ndarray) -> np.ndarray:
     """3s PCM float buffer -> [pauseRatio, energyVariance, zcrVariance]."""
     frame_len = 512
