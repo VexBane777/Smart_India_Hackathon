@@ -54,11 +54,16 @@ Verified by measurement (all on the deployed `voice_detector.onnx`):
   finally ported). `Monitor:` line now prints peak/noise dBFS.
 - Kotlin: `MainActivity` `pickAudioForTest` (ACTION_OPEN_DOCUMENT, ≤25 MB).
 
-**Next (real fix, needs the corpus — `data/` is deleted here):** retrain
-`voice_guard_v12_playback` per README wherever the audio lives, pass BOTH
-`eval_held_out_dirs_seqcnn.py` AND `eval_playback_loop.py`, then copy
-`model.onnx` to `../assets/models/voice_detector.onnx`, rebuild, and re-verify
-on-device (Live Mic Test + Logcat `Monitor:` raw= line).
+**Next (updated 2026-09-12 after v12):** `data/` exists on the training box,
+and v12 has since been trained and scored — see the "v12 RESULT" section at
+the end of this file. v12 is NOT deployed (it fails the confound gates), and
+it never saw `playback`. The plan for folding this acoustic loop in is
+`docs/superpowers/plans/2026-09-12-post-v12-plan.md`. Note that
+`eval_held_out_dirs_seqcnn.py` named above was retired on 2026-09-11
+(clean-only eval, selection on its own test set); `evaluate.py` replaces it,
+and `eval_playback_loop.py` stays as the per-asset loop gate. Ship only when
+both pass, then re-verify on-device (Live Mic Test + Logcat `Monitor:` raw=
+line, or the new "Test with audio file" path).
 
 ## Current status (2026-09-09)
 

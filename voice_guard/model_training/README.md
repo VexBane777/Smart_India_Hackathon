@@ -223,10 +223,10 @@ jobs have been killed at ~25 min before. `--workers 10` is safe on this
 way: see the gotcha above).
 
 **2026-09-09: the app now runs `model.onnx` directly via `flutter_onnxruntime`**
-(`lib/services/src/tflite_io.dart`), not a converted `.tflite`. `export_tflite.py`
-is kept only as a legacy/optional script (e.g. if a future need for actual
-on-device TFLite specifically comes up) — it is no longer part of the
-recommended flow, and `assets/models/voice_detector.tflite` was removed.
+(`lib/services/src/tflite_io.dart`), not a converted `.tflite`.
+`export_tflite.py` was deleted on 2026-09-11 (it asserted the retired 66-d
+MLP shape); `model.export_onnx` is the only export path, and
+`assets/models/voice_detector.tflite` was removed.
 Just copy `model.onnx` straight into `assets/models/voice_detector.onnx`;
 `flutter pub get` / rebuild picks it up automatically (directory already
 declared in `pubspec.yaml`). `.onnx` is gitignored project-wide *except*
@@ -249,35 +249,43 @@ are parity-tested, the gauge is `EMA(AI-prob)*100` with no inversion, and a
 reverb + speaker/phone-mic coloration + ambient noise flatten the prosody/
 LFCC cues the model keys on (see `docs/CRITICAL-entity-vs-style-confound.md`).
 
-The fix is model-side, and it is wired but NOT yet trained (the training
-corpus was deleted after v3 — reconstruct it with the "Getting real training
-data" commands above):
+The fix is model-side. The `playback` recipe exists, but it is NOT yet part
+of the eval protocol or of any training run: v12 (2026-09-12) trained on
+`none` + whatsapp/volte/cellular_3g and was evaluated on those plus
+gsm_2g/pstn/tandem_xnet. Folding `playback` in is steps 4–7 of
+`docs/superpowers/plans/2026-09-12-post-v12-plan.md`, and it needs
+`eval_protocol.py` to learn the channel first (`resolve_channels` rejects
+unknown names today). The "corpus was deleted after v3" note above came from
+a machine without the data; the training box has it under
+`model_training/data/`.
 
 1. **`vaani/telechannel/configs/channels.yaml` gained a `playback` recipe**
    (2026-09-11) modeling the acoustic loop: far room (RT60 600 ms, wet 0.6),
    pink noise at 12 dB, mic clip 0.3, no digital codec/packet loss, and a
    200-3800 Hz speaker+mic passband (uses the bandlimit stage's new
    `low_hz`/`high_hz` overrides — defaults remain 300-3400).
-2. **Retrain** — same command as `voice_guard_v11_seqcnn` but with
-   `playback` added to the channel mix:
+2. **Retrain**, once `playback` is an accepted channel. The v11-era flags in
+   this step (`--real/--fake/--real-clean/--channel/
+   --save-every-epoch-checkpoints`) no longer exist: `train_seq_cnn.py` takes
+   its corpus from `corpus.py`, its channels from `eval_protocol.py`, and
+   always writes per-epoch EMA checkpoints. The v12 sequence is:
    ```bash
-   python train_seq_cnn.py \
-       --real data/real data/real2021 data/real_itw_train \
-       --fake data/fake data/fake2021 data/fake_itw_train \
-       --real-clean data/real_noise_aug_split/train/en_native data/real_noise_aug_split/train/hi_native \
-       --channel whatsapp volte playback \
-       --weight-decay 1e-4 --label-smoothing 0.05 --attack-type-loss-weight 1.0 \
-       --save-every-epoch-checkpoints \
-       --out runs/voice_guard_v12_playback --epochs 25
+   python build_caches.py --train --cache-root "$VOICEGUARD_CACHE_ROOT"
+   python train_seq_cnn.py --out runs/voice_guard_v13 --cache-root "$VOICEGUARD_CACHE_ROOT"
+   python select_best_checkpoint_seqcnn.py --run runs/voice_guard_v13 \
+       --out runs/voice_guard_v13_selected --cache-root "$VOICEGUARD_CACHE_ROOT"
    ```
 3. **Deploy gate** — a model that still collapses on the speaker->mic loop
-   must not be shipped. Run BOTH, and only copy `model.onnx` into
-   `assets/models/voice_detector.onnx` when both pass:
+   must not be shipped. `eval_held_out_dirs_seqcnn.py` was retired on
+   2026-09-11 (clean-only, and it selected on its own test set); `evaluate.py`
+   replaces it and applies the confound + reference gates itself. Only copy
+   `model.onnx` into `assets/models/voice_detector.onnx` when BOTH pass:
    ```bash
-   python eval_held_out_dirs_seqcnn.py --model runs/voice_guard_v12_playback/model.pt \
-       --norm-stats runs/voice_guard_v12_playback/norm_stats.npz \
-       --real data/real_itw_held --fake data/fake_itw_held --baseline-eer 0.1538
-   python eval_playback_loop.py --onnx runs/voice_guard_v12_playback/model.onnx \
+   python evaluate.py --split test --out runs/eval_v13_test \
+       --model v13=runs/voice_guard_v13_selected/model.pt \
+       --model v12=runs/voice_guard_v12_selected/model.pt \
+       --candidate v13 --reference v12
+   python eval_playback_loop.py --onnx runs/voice_guard_v13_selected/model.onnx \
        --assets test_assets --gate-clean-min 0.60 --gate-loop-min 0.50
    ```
    `eval_playback_loop.py` scores each test asset clean vs. through
