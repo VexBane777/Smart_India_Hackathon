@@ -53,4 +53,17 @@ class SettingsProvider extends ChangeNotifier {
     (await SharedPreferences.getInstance()).setBool('onboardingDone', v);
     notifyListeners();
   }
+
+  Future<void> resetToDefaults() async {
+    _protectionEnabled = true;
+    _overlayEnabled = true;
+    _soundEnabled = true;
+    _sensitivity = 0.60;
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('protectionEnabled', true);
+    await p.setBool('overlayEnabled', true);
+    await p.setBool('soundEnabled', true);
+    await p.setDouble('sensitivity', 0.60);
+    notifyListeners();
+  }
 }
