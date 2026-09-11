@@ -47,3 +47,19 @@ def test_attack_type_for_file_uses_per_file_map_first():
 
 def test_attack_type_for_file_falls_back_to_unknown_with_no_map_or_default():
     assert attack_type_for_file(Path("/some/unlabeled/dir/1.wav"), "/some/unlabeled/dir", None) == "unknown"
+
+
+def test_build_attack_type_maps_finds_fake2021_if_protocol_present():
+    from build_attack_type_maps import build_attack_type_maps
+
+    maps = build_attack_type_maps()
+    fake2021 = str((Path(__file__).parent / "data" / "fake2021").resolve())
+    protocol_path = (
+        Path(__file__).parent / "data" / "asvspoof2021_la" / "LA-keys-full"
+        / "keys" / "LA" / "CM" / "trial_metadata.txt"
+    )
+    if protocol_path.exists():
+        assert fake2021 in maps
+        assert len(maps[fake2021]) > 0
+    else:
+        assert fake2021 not in maps  # nothing to assert if the real corpus isn't present on this machine

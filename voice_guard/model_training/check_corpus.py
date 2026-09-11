@@ -82,6 +82,21 @@ def main() -> None:
         else:
             print("  no obvious technical or acoustic shortcut found")
 
+        from build_attack_type_maps import build_attack_type_maps
+        from attack_labels import attack_type_for_file
+
+        attack_maps = build_attack_type_maps()
+        fake_resolved = str(Path(fake_dir).resolve())
+        per_file_map = attack_maps.get(fake_resolved)
+        fake_files = sorted(Path(fake_dir).glob("*.wav"))
+        if fake_files:
+            labeled = sum(
+                1 for f in fake_files
+                if attack_type_for_file(f, fake_resolved, per_file_map) != "unknown"
+            )
+            print(f"  attack-type coverage: {labeled}/{len(fake_files)} fake files labeled "
+                  f"({labeled / len(fake_files):.0%})")
+
     if had_issue:
         print("\ncheck_corpus: at least one directory pair looks risky to train on as-is. "
               "Review before running train.py.")
