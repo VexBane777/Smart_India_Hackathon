@@ -1649,6 +1649,71 @@ balanced accuracy < 0.70 or MLAAD tts share < 0.70), the recommendation is
 to hide the sub-label, coordinated with the UI session
 (before touching call_screen.dart / assets/models/).
 
+## v12 RESULT (2026-09-12 05:05) — first model above chance on phone audio, NOT deployed (confound gates fail)
+
+Full report: `model_training/runs/eval_v12_test/report.md` (+ report.json).
+Pipeline ran unattended: caches (98 eval + 32 train units, 313k
+file-renditions), 30 epochs, selection on `select`, fp16 validation, then
+one scoring pass on `test` for v9 + v11 + v12.
+
+**Headline, test split, pooled over the six phone channels** (5,609 files /
+63,196 windows), 95% CI by file bootstrap:
+
+| model | EER | 95% CI | none (reference) | seen phone | unseen phone |
+|---|---|---|---|---|---|
+| v9 (MLP) | 0.5087 | [0.4993, 0.5185] | 0.2163 | 0.4930 | 0.5167 |
+| v11 (deployed) | 0.4853 | [0.4766, 0.4939] | 0.0788 | 0.4865 | 0.4899 |
+| **v12 (SeqTCN)** | **0.3223** | [0.3138, 0.3308] | 0.0624 | 0.2134 | 0.4015 |
+
+**DEPLOY DECISION: NO.** The gate (fixed before any model was scored) is
+confound-pass AND beat the reference. v12 beats v11 decisively — the CIs do
+not overlap, and it is the first model here that is not at chance on calls —
+but it FAILS 9 of 14 confound rows, so it does not ship. v11 stays deployed.
+Deploying a model that is still keyed to acoustic style would repeat the
+exact mistake this whole track exists to stop.
+
+What v12 changed and what it did not:
+- Trained with phone channels in the loop instead of clean-only. Per channel:
+  whatsapp 0.2036, volte 0.1586, pstn 0.2517, cellular_3g 0.2770, vs v11's
+  0.47-0.48 everywhere. So channel-matched training is what moved the needle.
+- **Unseen channels generalize far worse than seen ones** (0.4015 vs 0.2134;
+  gsm_2g 0.4469, tandem_xnet 0.3946). v12 learned these three channels more
+  than it learned channel-invariant speech. gsm_2g is the harshest codec and
+  the most likely real-world case.
+- **Accent cells stay at chance** for every model (en_native 0.4695,
+  hi_native 0.5142 for v12). Indian-accent generalization is untouched by
+  this work.
+- MLAAD (unseen modern TTS) FNR 40.4%, better than v11's 53.7% but still bad.
+- **Confound v2 fails.** Real side improved a lot (v11 failed 5 real rows
+  with ratios 1.35-1.76; v12 fails 3, ratios 1.25-1.56). The fake side got
+  WORSE and is now the problem: zcrVariance rate ratio 5.13 (FNR 53.7% on
+  the low half vs 10.5% on the high half, rho 0.544), jitter 3.21, hnr_db
+  2.59. v12 detects fakes largely by acoustic texture, not by speaker
+  identity — the entity-vs-style confound in `docs/CRITICAL-entity-vs-style-
+  confound.md`, now measured on the fake side and on phone audio.
+  `fake:pad_fraction` also fails (1.26), so padding is leaking slightly into
+  the fake decision; eval never rebalances padding by design.
+
+**Attack-type head PASSES both gates** (the first time): leave-attack-out
+balanced accuracy 0.763 (gate 0.70) and MLAAD tts share 74.3% (gate 0.70),
+against v11's 0.683 / 24.2%. In-distribution 0.921; the UI sub-label, when
+shown, is right 81.7% of the time on the leave-out attacks. **So the
+sub-label does not need hiding** — but it is moot until a model ships, since
+the head that passes is v12's and v12 is not deploying.
+
+fp16 cache storage validated: max |dp| 8.7e-4 (v11) and 2.1e-4 (v9) against
+the 0.01 gate, zero decision flips at either threshold.
+
+Training-time val EER (0.184 phone) vs held-out (0.322) is a 14-point
+generalization gap: val files come from the training sources, so training
+val is not a substitute for the held-out split.
+
+**Next:** `docs/superpowers/plans/2026-09-12-post-v12-plan.md` — the
+acoustic-loop `playback` channel that upstream added (the on-device failure
+mode), precise cache invalidation, then a v13 that must fix the fake-side
+confound rather than only adding channels. Unseen-channel generalization and
+the accent cells are the two other open fronts.
+
 ## How to keep this file useful
 
 - Update the "Current status" date and paragraph at the *start* of a

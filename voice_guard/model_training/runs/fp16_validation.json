@@ -1,0 +1,27 @@
+{
+ "n_windows": 1569,
+ "channels": [
+  "none",
+  "whatsapp",
+  "gsm_2g"
+ ],
+ "max_abs_feature_delta": 0.125,
+ "models": {
+  "runs\\voice_guard_v11_seqcnn_selected\\model.pt": {
+   "arch": "seqcnn_v1",
+   "max_abs_delta_p": 0.0008697509765625,
+   "mean_abs_delta_p": 5.913513450650498e-05,
+   "flips_at_0.5": 0,
+   "flips_at_0.6": 0,
+   "pass": true
+  },
+  "runs\\voice_guard_v9_noisefix_final\\model.pt": {
+   "arch": "mlp_63d",
+   "max_abs_delta_p": 0.0002142190933227539,
+   "mean_abs_delta_p": 1.7240819943253882e-05,
+   "flips_at_0.5": 0,
+   "flips_at_0.6": 0,
+   "pass": true
+  }
+ }
+}
