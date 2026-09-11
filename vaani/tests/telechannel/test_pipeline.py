@@ -30,7 +30,7 @@ from telechannel.stages.bandlimit import apply_bandlimit
 
 HAS_FFMPEG = shutil.which("ffmpeg") is not None
 
-ALL_RECIPES = ["clean", "pstn", "gsm_2g", "cellular_3g", "volte", "whatsapp", "tandem_xnet"]
+ALL_RECIPES = ["clean", "pstn", "gsm_2g", "cellular_3g", "volte", "whatsapp", "playback", "tandem_xnet"]
 
 
 def _sine(freq_hz, sr, duration_s, amplitude=0.2):
@@ -64,7 +64,7 @@ def test_load_config_defines_all_required_recipes():
     config = load_config()
     recipes = config["recipes"]
 
-    for name in ["pstn", "gsm_2g", "cellular_3g", "volte", "whatsapp", "tandem_xnet"]:
+    for name in ["pstn", "gsm_2g", "cellular_3g", "volte", "whatsapp", "playback", "tandem_xnet"]:
         assert name in recipes, f"missing required recipe: {name}"
 
     # The ffmpeg-free control recipe used to exercise orchestration without

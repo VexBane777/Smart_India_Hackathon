@@ -51,3 +51,34 @@ def test_apply_bandlimit_passes_in_band_1khz_tone():
 
     # In-band tone should pass through with only modest attenuation.
     assert relative_db > -3
+
+
+def test_apply_bandlimit_custom_cutoffs_override_defaults():
+    """The playback recipe needs a wider-than-POTS passband (laptop speaker
+    200-3800 Hz into a phone mic). Explicit low_hz/high_hz must override the
+    300-3400 default, passing a 200 Hz tone that the default would reject."""
+    sr = 16000
+
+    # 200 Hz: below the default 300 Hz low cutoff.
+    x_200 = _sine(200, sr, duration_s=8.0)
+    # 4200 Hz: above both the default 3400 Hz and the custom 3800 Hz high
+    # cutoff — must still be suppressed by the custom passband.
+    x_4200 = _sine(4200, sr, duration_s=8.0)
+
+    def rel_db(x, y):
+        return 10 * np.log10(np.sum(y ** 2) / np.sum(x ** 2))
+
+    default_200 = rel_db(x_200, apply_bandlimit(x_200, sr=sr))
+    custom_200 = rel_db(x_200, apply_bandlimit(x_200, sr=sr, low_hz=200, high_hz=3800))
+
+    # The custom passband must pass 200 Hz far better than the POTS default
+    # (measured ~ -39 dB default vs ~ -6 dB custom, both dominated by the
+    # 5th-order Butterworth cutoff edge — assert the RELATIVE 30 dB gap, not
+    # the absolute value, so the test isn't brittle to filter-order details).
+    assert default_200 < -20
+    assert custom_200 > default_200 + 20
+
+    # Content above the custom passband is still suppressed (measured -16 dB
+    # on a 4.2 kHz tone; the exact ratio again depends on filter order).
+    custom_4200 = rel_db(x_4200, apply_bandlimit(x_4200, sr=sr, low_hz=200, high_hz=3800))
+    assert custom_4200 < -10

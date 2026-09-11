@@ -99,6 +99,34 @@ recipes:
     loss: { p_gb: 0.06, p_bg: 0.20 }
     bandlimit: { enabled: false }
 
+  # Acoustic playback loop: a pre-recorded clip played through a small
+  # loudspeaker into a phone microphone (the classic "phone's recorder
+  # overhears a laptop speaker" demo / scam-call playback scenario). This is
+  # deliberately NOT a telephony chain — no digital codec and no packet loss
+  # (the loop is analog end-to-end). What it models, and why the deployed
+  # model collapses on real playback->mic re-recordings (2026-09-11):
+  #   * room reverberation (far room, RT60 600ms, wet 0.6) — the dominant
+  #     killer, it smears formant transitions and fills pauses, flattening
+  #     exactly the prosody/LFCC cues the model keys on;
+  #   * ambient room noise (pink, 12 dB) — lifts the noise floor, dropping
+  #     HNR and LFCC SNR (measured on the deployed v11_seqcnn model:
+  #     ai_clone_test_clip.wav 0.986 direct -> ~0.01-0.30 re-recorded);
+  #   * mic headroom/clipping (clip_prob 0.3);
+  #   * speaker+mic spectral shaping (200-3800 Hz) — a small laptop speaker
+  #     and a phone mic are both band-limited and rolled off, not POTS-narrow;
+  #     uses bandlimit's new low_hz/high_hz overrides (default recipe cutoffs
+  #     are still 300-3400).
+  # Train with this in the channel mix (e.g. `--channel whatsapp volte
+  # playback`) so the model learns these artifacts as fake-presenting instead
+  # of pushing them into the "real/human" region.
+  playback:
+    rir: { room: far, wet_gain: 0.6 }
+    noise: { type: pink, snr_db: 12 }
+    mic: { clip_prob: 0.3 }
+    codec: []
+    loss: { p_gb: 0.0, p_bg: 0.0 }
+    bandlimit: { enabled: true, low_hz: 200, high_hz: 3800 }
+
   # Tandem/cross-network transcoding: two codec round-trips in sequence
   # (AMR-NB then G.711 mu-law), simulating a call that crosses two networks
   # and gets transcoded at the gateway between them.

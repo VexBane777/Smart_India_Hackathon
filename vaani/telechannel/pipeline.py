@@ -141,7 +141,12 @@ def process_clip(audio, recipe_name, sr=16000, config=None, config_path=None, rn
 
     band_cfg = recipe.get("bandlimit")
     if band_cfg and band_cfg.get("enabled", False):
-        x = apply_bandlimit(x, sr=sr)
+        x = apply_bandlimit(
+            x,
+            sr=sr,
+            low_hz=band_cfg.get("low_hz") if isinstance(band_cfg, dict) else None,
+            high_hz=band_cfg.get("high_hz") if isinstance(band_cfg, dict) else None,
+        )
 
     # Final full-scale safety clamp (2026-09-06): every downstream consumer
     # (FLAC write, mel-spectrogram extraction) assumes output in [-1, 1].
