@@ -65,12 +65,20 @@ def main() -> None:
     print(f"Training device: {device}")
 
     from model import VoiceGuardSeqCNN  # local import: keeps torch off the ProcessPoolExecutor workers' import path
+    from build_attack_type_maps import build_attack_type_maps
 
+    attack_type_maps = build_attack_type_maps()
     recipes = parse_channel_arg(args.channel)
     print(f"Building examples (channels={recipes})...")
-    examples = build_examples(args.real, args.fake, channel_recipes=recipes, workers=args.workers, seed=args.seed)
+    examples = build_examples(
+        args.real, args.fake, channel_recipes=recipes, workers=args.workers, seed=args.seed,
+        attack_type_maps=attack_type_maps,
+    )
     if args.real_clean or args.fake_clean:
-        examples += build_examples(args.real_clean, args.fake_clean, channel_recipes=[None], workers=args.workers, seed=args.seed)
+        examples += build_examples(
+            args.real_clean, args.fake_clean, channel_recipes=[None], workers=args.workers, seed=args.seed,
+            attack_type_maps=attack_type_maps,
+        )
 
     train_ex, val_ex = split_by_source(examples)
     X_seq_train, X_scalar_train, y_train, attack_train = to_arrays(train_ex)
