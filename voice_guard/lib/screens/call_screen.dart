@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../providers/call_state_provider.dart';
 import '../providers/risk_score_provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/calibration_provider.dart';
 import '../services/call_service.dart';
 import '../services/audio_service.dart';
 import '../services/notification_service.dart';
@@ -80,17 +81,19 @@ class _CallScreenState extends State<CallScreen> {
     final calls = context.read<CallService>();
     final notifs = context.read<NotificationService>();
 
+    final calibration = context.read<CalibrationProvider>();
     _scoreSub = audio.scoreStream.listen((score) async {
       if (!mounted) return;
       final wasAlert = riskProvider.isAlert;
-      riskProvider.update(score);
+      final effectiveThreshold = calibration.effectiveThreshold(settings.sensitivity);
+      riskProvider.update(score, alertThreshold: effectiveThreshold);
       final cur = riskProvider.current;
       debugPrint('Monitor: raw=${score.toStringAsFixed(3)} ema=${cur?.score.toStringAsFixed(3)} '
           'state=${riskProvider.state} label=${cur?.label}');
       if (!wasAlert && riskProvider.isAlert) {
         debugPrint('Monitor: ALERT fired — ema=${cur?.score.toStringAsFixed(3)} sensitivity=${settings.sensitivity}');
       }
-      if (cur != null && cur.score > settings.sensitivity) {
+      if (cur != null && cur.score > effectiveThreshold) {
         if (settings.overlayEnabled) {
           try { await calls.showOverlay(riskScore: cur.score, verdict: cur.label); } catch (_) {}
         }

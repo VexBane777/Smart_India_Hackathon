@@ -5,6 +5,24 @@ import 'tflite_service.dart';
 
 import 'dart:math' as math;
 
+/// Result of a calibration capture — mean/std of raw (pre-EMA) model
+/// scores over N consecutive 3s windows of the user's own voice.
+class CalibrationSample {
+  final double mean;
+  final double std;
+  final int windowsCaptured;
+  const CalibrationSample({required this.mean, required this.std, required this.windowsCaptured});
+
+  factory CalibrationSample.fromScores(List<double> scores) {
+    if (scores.isEmpty) {
+      return const CalibrationSample(mean: 0.0, std: 0.0, windowsCaptured: 0);
+    }
+    final mean = scores.reduce((a, b) => a + b) / scores.length;
+    final variance = scores.map((s) => (s - mean) * (s - mean)).reduce((a, b) => a + b) / scores.length;
+    return CalibrationSample(mean: mean, std: math.sqrt(variance), windowsCaptured: scores.length);
+  }
+}
+
 /// Buffers raw PCM16 frames from the native EventChannel and emits risk scores.
 /// Raw PCM is held only in RAM and discarded after feature extraction.
 class AudioService {
@@ -97,6 +115,30 @@ class AudioService {
   }
 
   void clearBuffer() => _buffer.clear();
+
+  /// Collects `windows` consecutive raw scores from scoreStream, without
+  /// touching RiskScoreProvider (deliberately — see plan Global
+  /// Constraints: calibration must never pollute call logs/risk history).
+  /// Caller is responsible for having already started native capture
+  /// (`CallService.startCallDetection()`) and `startScoring()` — this
+  /// method only *listens*, it doesn't start capture, mirroring how
+  /// call_screen.dart's Live Mic Test already separates those concerns.
+  Future<CalibrationSample> captureCalibrationSample({
+    int windows = 8,
+    Duration perWindowTimeout = const Duration(seconds: 2),
+  }) async {
+    final scores = <double>[];
+    final sub = scoreStream.listen(scores.add);
+    try {
+      final deadline = DateTime.now().add(perWindowTimeout * windows);
+      while (scores.length < windows && DateTime.now().isBefore(deadline)) {
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+    } finally {
+      await sub.cancel();
+    }
+    return CalibrationSample.fromScores(scores);
+  }
 
   Future<void> injectBenchmarkTest({required bool isAiVoice}) async {
     final chunk = List<double>.generate(16000, (i) {
