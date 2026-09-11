@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import '../utils/constants.dart';
+import '../design/tokens.dart';
+import 'shad_card.dart';
+import 'shad_button.dart';
 
 class PermissionCard extends StatelessWidget {
   final IconData icon;
@@ -8,6 +10,7 @@ class PermissionCard extends StatelessWidget {
   final bool granted;
   final VoidCallback onAction;
   final String actionLabel;
+
   const PermissionCard({
     super.key,
     required this.icon,
@@ -20,39 +23,63 @@ class PermissionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: granted ? AppColors.verified.withValues(alpha: 0.3) : Colors.black12),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 2))],
+    return ShadCard(
+      padding: const EdgeInsets.all(ShadTokens.space3),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(ShadTokens.radiusMd),
+              border: Border.all(color: ShadTokens.border),
+            ),
+            child: Icon(
+              icon,
+              color: granted ? ShadTokens.foreground : ShadTokens.muted,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: ShadTokens.space3),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: ShadTokens.cardFg,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: ShadTokens.muted,
+                    height: 1.3,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: ShadTokens.space2),
+          ShadButton(
+            onTap: onAction,
+            variant: granted ? ShadButtonVariant.outline : ShadButtonVariant.primary,
+            size: ShadButtonSize.sm,
+            text: actionLabel,
+          ),
+        ],
       ),
-      child: Row(children: [
-        Container(
-          width: 44, height: 44,
-          decoration: BoxDecoration(color: granted ? AppColors.verifiedBg : const Color(0xFFF5F5F5), borderRadius: BorderRadius.circular(10)),
-          child: Icon(icon, color: granted ? AppColors.verified : Colors.black54),
-        ),
-        const SizedBox(width: 12),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 2),
-          Text(subtitle, style: const TextStyle(fontSize: 11, color: Colors.black54)),
-          const SizedBox(height: 4),
-          Row(children: [
-            Icon(granted ? Icons.check_circle : Icons.error_outline, size: 14, color: granted ? AppColors.verified : AppColors.suspicious),
-            const SizedBox(width: 4),
-            Text(granted ? 'Granted' : 'Required', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: granted ? AppColors.verified : AppColors.suspicious)),
-          ]),
-        ])),
-        const SizedBox(width: 8),
-        FilledButton(
-          onPressed: onAction,
-          style: FilledButton.styleFrom(backgroundColor: granted ? AppColors.verified : AppColors.primary, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
-          child: Text(actionLabel, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-        ),
-      ]),
     );
   }
 }
