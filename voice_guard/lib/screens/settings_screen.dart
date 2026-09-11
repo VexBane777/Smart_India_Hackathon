@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/calibration_provider.dart';
 import '../services/call_service.dart';
+import '../services/audio_service.dart';
 import '../utils/constants.dart';
 import '../utils/permissions.dart';
 import '../widgets/permission_card.dart';
@@ -16,6 +18,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isDefaultDialer = false;
   bool _hasOverlay = false;
   bool _hasPhonePerms = false;
+  bool _calibrating = false;
+
+  Future<void> _runCalibration() async {
+    setState(() => _calibrating = true);
+    final calls = context.read<CallService>();
+    final audio = context.read<AudioService>();
+    final calib = context.read<CalibrationProvider>();
+    try {
+      audio.clearBuffer();
+      audio.startScoring();
+      await calls.startCallDetection();
+      final sample = await audio.captureCalibrationSample();
+      await calls.stopCallDetection();
+      audio.stopScoring();
+      if (sample.windowsCaptured < 4) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Not enough speech captured — try again somewhere quieter.')),
+          );
+        }
+        return;
+      }
+      await calib.setBaseline(sample.mean, sample.std);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Voice calibration saved.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _calibrating = false);
+    }
+  }
 
   @override
   void initState() {
@@ -58,6 +92,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Text('Lower = more sensitive (more alerts). Maps to "configurable thresholds per scenario" in the SIH brief.',
                 style: TextStyle(fontSize: 10, color: Colors.black.withValues(alpha: 0.55))),
           ]),
+        ),
+        const SizedBox(height: 14),
+        _section('Voice Calibration'),
+        Consumer<CalibrationProvider>(
+          builder: (context, calib, _) => Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.black12)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(
+                calib.isCalibrated
+                    ? 'Calibrated — alerts are tuned to your voice.'
+                    : 'Not calibrated — using the default alert threshold for everyone.',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Records ~10 seconds of you speaking normally, on-device only, '
+                'to tune the alert line to your natural speaking style. '
+                'Nothing is uploaded.',
+                style: TextStyle(fontSize: 11, color: Colors.black54),
+              ),
+              const SizedBox(height: 12),
+              Row(children: [
+                FilledButton.icon(
+                  onPressed: _calibrating ? null : _runCalibration,
+                  icon: _calibrating
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.mic),
+                  label: Text(_calibrating
+                      ? 'Listening...'
+                      : (calib.isCalibrated ? 'Recalibrate' : 'Calibrate My Voice')),
+                ),
+                if (calib.isCalibrated) ...[
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: _calibrating ? null : () => calib.clearBaseline(),
+                    child: const Text('Reset'),
+                  ),
+                ],
+              ]),
+            ]),
+          ),
         ),
         const SizedBox(height: 14),
         _section('Permissions & Dialer'),

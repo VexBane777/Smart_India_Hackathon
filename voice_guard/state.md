@@ -1263,6 +1263,73 @@ optimized before committing to a benchmark.
   replacing `tflite_flutter`). See "Accent/clone data pipeline + ONNX
   swap" above for the full rationale on the last two.
 
+## Track 1 (per-speaker calibration) implemented, Track 2 & 3 still plan-only (2026-09-11)
+
+Per `docs/CRITICAL-entity-vs-style-confound.md` §4, remediation track 1
+("cheap, partial, immediate: per-speaker relative calibration") is now
+implemented, on branch `voiceguard-track1-calibration`
+(`docs/superpowers/plans/2026-09-11-per-speaker-calibration-plan.md`).
+Tracks 2 (jitter/shimmer/HNR,
+`docs/superpowers/plans/2026-09-11-physiological-features-plan.md`) and 3
+(frame-level sequence model,
+`docs/superpowers/plans/2026-09-11-frame-level-sequence-model-plan.md`) are
+still plan-only — **track 1 alone does not fix the confound's root cause**,
+per the CRITICAL doc it only stops permanent false-flagging of a
+consistent individual by relocating the alert line, not by giving the
+model any new signal.
+
+What shipped, Dart-only, no model/feature-extraction changes:
+
+- `lib/providers/calibration_provider.dart` — `CalibrationProvider`
+  (`ChangeNotifier`), persists `baselineMean`/`baselineStd`/`isCalibrated`
+  via `SharedPreferences`. Core logic is the static, pure
+  `computeThreshold({sensitivity, isCalibrated, baselineMean,
+  populationMean})`: uncalibrated returns `sensitivity` unchanged;
+  calibrated shifts it by `baselineMean - populationMean` (population mean
+  assumed `0.15`, matching `RiskScoreProvider`'s own EMA seed), clamped to
+  `[0.35, 0.90]` so calibration can never fully disable or permanently
+  force an alert.
+- `lib/services/audio_service.dart` — `CalibrationSample` value type +
+  `AudioService.captureCalibrationSample({windows, perWindowTimeout})`,
+  which listens to the existing `scoreStream` (confirmed to carry the
+  **raw, pre-EMA** score — `audio_service.dart:89-90`) without touching
+  `RiskScoreProvider`, so a calibration run never pollutes call logs or
+  risk history.
+- `lib/screens/call_screen.dart` — `_bindPipeline` now computes
+  `calibration.effectiveThreshold(settings.sensitivity)` per score and
+  passes it as `RiskScoreProvider.update(score, alertThreshold: ...)`
+  (that parameter already existed, unused, before this change); the
+  overlay/notification gating check was switched from
+  `settings.sensitivity` to the same `effectiveThreshold` so the UI stays
+  internally consistent.
+- `lib/screens/settings_screen.dart` — new "Voice Calibration" section:
+  Calibrate/Recalibrate button (drives `CallService.startCallDetection()`
+  + `AudioService.captureCalibrationSample()`, same native-capture pattern
+  Live Mic Test already uses), Reset button, status text.
+- `lib/main.dart` — `CalibrationProvider` registered in the app's
+  `MultiProvider` tree and `.load()`ed at startup, same pattern as
+  `SettingsProvider`.
+
+**Verified:** `flutter analyze` clean (one pre-existing unrelated
+`prefer_initializing_formals` info-lint, not touched by this work);
+`flutter test` — all 15 tests pass, including 6 new
+(`test/calibration_provider_test.dart`,
+`test/audio_service_calibration_test.dart`) and the full pre-existing
+suite unmodified and still green (uncalibrated behavior is provably
+unchanged — a fresh `CalibrationProvider` starts `isCalibrated == false`,
+and `computeThreshold` returns `sensitivity` unchanged in that case).
+
+**Not verified — explicitly flagged, not claimed working:** the on-device
+manual check called for by the plan (Task 4, Step 3) — actually running
+"Calibrate My Voice" on a real device, confirming the snackbar/status text
+update, and confirming the EMA/alert log lines show a different implicit
+threshold for a deliberately monotone reading before vs. after
+calibration. No physical/emulated Android device was available in the
+session that implemented this. Do the on-device check before treating this
+as done; this file's own convention (see "How to keep this file useful"
+below) is to record what's proven vs. only unit-tested, not to claim
+device-level correctness from code review alone.
+
 ## How to keep this file useful
 
 - Update the "Current status" date and paragraph at the *start* of a

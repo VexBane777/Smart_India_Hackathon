@@ -4,6 +4,7 @@ import 'app.dart';
 import 'providers/settings_provider.dart';
 import 'providers/call_state_provider.dart';
 import 'providers/risk_score_provider.dart';
+import 'providers/calibration_provider.dart';
 import 'services/tflite_service.dart';
 
 import 'services/audio_service.dart';
@@ -16,6 +17,8 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final settings = SettingsProvider();
   await settings.load();
+  final calibration = CalibrationProvider();
+  await calibration.load();
   final tflite = TFLiteService();
   tflite.init();
 
@@ -63,6 +66,7 @@ void main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: settings),
+        ChangeNotifierProvider.value(value: calibration),
         ChangeNotifierProvider.value(value: callStateProvider),
         ChangeNotifierProvider.value(value: riskScoreProvider),
         Provider<TFLiteService>.value(value: tflite),
