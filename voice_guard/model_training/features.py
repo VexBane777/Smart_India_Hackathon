@@ -214,7 +214,7 @@ def extract_features(pcm: np.ndarray) -> np.ndarray:
     return np.concatenate([lfcc, prosody, physio]).astype(np.float32)
 
 
-def chunk_audio(pcm: np.ndarray, chunk_samples: int = CHUNK_SAMPLES) -> list[np.ndarray]:
-    """Split a clip into non-overlapping 3s chunks, dropping a shorter final chunk."""
-    n_chunks = len(pcm) // chunk_samples
-    return [pcm[i * chunk_samples : (i + 1) * chunk_samples] for i in range(n_chunks)]
+# Windowing (3 s windows, short-clip padding, tail windows) lives in
+# dataset.py (process_file) since v12. The old chunk_audio here silently
+# dropped every clip under 3 s (~74% of training files) and was removed
+# 2026-09-11.

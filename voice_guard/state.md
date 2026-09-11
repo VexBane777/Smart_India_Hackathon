@@ -1547,6 +1547,216 @@ source-code reading of the Dart plugin, not a live run. If real-world
 behavior looks wrong after this deploy, on-device verification is the
 first thing to actually do, not assume already covered.
 
+## v12 eval-hardening: no clean-only eval, committed split, cache-backed retrain (2026-09-11, in progress)
+
+Per `docs/superpowers/plans/2026-09-11-v12-eval-hardening-handoff.md` and
+`docs/EVAL-PROTOCOL.md` (new, the single source of truth — read it before
+any model-training session). Branch `voiceguard-v12-hardening`, worktree
+`.worktrees/voiceguard-v12-hardening`. All v11 review items 1–11 addressed
+in one pass, code first, then execution.
+
+**Correction of this file's v11 confound table (review item 1, now fixed
+here):** the v11 section above lists v9_noisefix's confound "baseline gaps"
+as pauseRatio 14.7pt / energyVariance 25.1pt / zcrVariance 13.1pt. Those are
+v9's **half-means**, not gaps. The actual v9 gaps (high-half mean minus
+low-half mean, v9_noisefix, measure_confound.py at the time) are
+energyVariance ~12.2pt, pauseRatio ~8.9pt, zcrVariance ~11.8pt. And the
+absolute-point gap metric itself is scale-dependent (v11's mean fake-prob on
+reals is about half of v9's), so the honest form is the ratio:
+pauseRatio's real-side high/low ratio moved only from ~1.61x (v9) to ~1.36x
+(v11), not to ~zero. v12's protocol therefore gates on BOTH |rho|<=0.10 and
+the worse/better-half ratio of FPR (reals) / FNR (fakes) <= 1.25 AND
+absolute difference > 1pt with file-level bootstrap significance
+(Bonferroni) — the significance clause was added after a synthetic no-confound
+model failed the bare ratio gate by chance, before any real model was scored.
+
+**Channel policy (user directive, enforced in code):** no eval or training
+run may see only clean audio unless `--application bank`. `eval_protocol.py`
+`resolve_channels()` raises `CleanOnlyEvalError`; `test_eval_protocol.py`
+AST-scans every script for literal clean-only channel lists and fails CI on
+a bypass. PHONE_CHANNELS = whatsapp, volte, cellular_3g, gsm_2g, pstn,
+tandem_xnet (TeleChannel recipe names; `clean` is a debug recipe, never
+allowed). TRAIN_CHANNELS = none + whatsapp/volte/cellular_3g, so
+gsm_2g/pstn/tandem_xnet are the unseen-channel eval group. v11's headline
+EER was a clean-audio number — this policy exists so that can't recur.
+
+**Split discipline (review item 2):** `eval_splits/held_out_split_v1.json`
+(committed, written by `make_eval_splits.py`, refuses overwrite) splits every
+core held-out set 50/50 by stable file hash into `select` (checkpoint
+selection may read ONLY this) and `test` (evaluate.py, once per candidate).
+Known limitation, documented in the manifest: ITW's meta.csv is gone so
+select/test is file-level, not speaker-level; train vs held-out is still
+speaker-disjoint. MLAAD (580 FLAC, ~20 modern TTS systems) and the accent
+cells are test-only sets.
+
+**Windowing (review items 9–10):** clips 1.0–3.0 s are no longer dropped
+(~74% of training files were, silently) — they're padded to 3 s with
+Gaussian noise at the clip's own noise floor, before the channel, and every
+window records `pad_fraction`. All per-file randomness is seeded by a stable
+hash of (data-relative file id, purpose, channel, seed), never the task
+index — the same dir now yields identical windows in every script
+(the 762-vs-757 file discrepancy is dead). Training pad-balances each source
+set via `compute_pad_policy`; eval never rebalances (pad_fraction is a
+gated confound instead).
+
+**Feature cache (review item 8, the OOM):** `feature_cache.py` writes
+fp16 memmap shards per (file list, channel, seed) unit; peak RAM ~one shard.
+Manifests carry a feature-version hash over the actual code (AST,
+docstrings stripped), channels.yaml, library versions and the ffmpeg build;
+opening or building over a stale unit raises `StaleCacheError` — staleness
+is loud. fp16's effect on outputs is measured by `validate_fp16.py`
+(gate max |dp| <= 0.01), not assumed.
+
+**Model/training (review items 6–7):** `VoiceGuardSeqTCN` ("seqtcn_v2"):
+dilated residual TCN, receptive field 65 frames (~1.1 s, vs v11's ~130 ms),
+mean+std+max pooling, ~87k params, same ONNX I/O contract as v11 (Dart side
+unchanged). Training: cache-backed, AdamW wd 0.01, 1-epoch warmup + cosine
+decay, 30 epochs, batch 256, EMA 0.999 saved per epoch, class-weighted CE,
+label smoothing 0.05, attack-type loss weight 0.5. **Leave-attack-out:**
+A11 (TTS) and A18 (VC) are masked from the attack-type loss so the head can
+be scored on systems it never saw labels for. Every fake carries its attack
+ID (A01–A19) where the corpus knows it (ASVspoof2019 train protocol for
+data/fake, trial_metadata.txt for fake2021; ITW/CodecFake stay "unknown"
+and are masked).
+
+**Legacy scripts retired (review item 11), with where each went:**
+- train.py (MLP), train_curriculum.py: replaced by train_seq_cnn.py
+  (cache-backed; the MLP architecture stays in model.py only for scoring
+  v3–v10 baselines through MLPSequenceAdapter).
+- eval_held_out.py, eval_held_out_dirs.py, eval_held_out_dirs_seqcnn.py,
+  measure_confound.py, measure_confound_seqcnn.py, eval_accent_cells.py:
+  replaced by evaluate.py (the one harness: headline EER + file-level
+  bootstrap CI, per-channel/seen-unseen/padded/accent rows, confound v2 on
+  real AND fake side with the fixed gates, attack-type gates, report.json +
+  report.md). Accent cells are eval sets in the harness now.
+- select_best_checkpoint.py (MLP): select_best_checkpoint_seqcnn.py (select
+  split only, AST-enforced).
+- export_tflite.py: retired (the app runs model.onnx directly since
+  2026-09-09; the script was legacy/optional anyway).
+- compute_eer moved to eval_stats.py (rewritten O(n log n), pinned by
+  test_eval_stats.py against the old loop's semantics).
+
+**Corpus preflight (check_corpus.py) before the run:** all three train pairs
+passed — ~95–100% of files long enough to window under the new 1 s cutoff;
+no technical or acoustic shortcut found; attack-type label coverage: fake
+(ASV2019 train) 100%, fake2021 88% (LA_D_* dev files have no protocol here
+and stay "unknown", masked from the attack loss), fake_itw_train 0% (ITW
+has no ground truth, masked). Every dropped file is counted in each cache
+manifest — nothing is silently lost.
+
+**Pipeline status (this session, Task Scheduler chain — tool-launched
+background jobs got reaped at the 30 s shell cap on this box; scheduled
+tasks survive):** stage 1 `build_caches.py --eval` then `--train` (the
+earlier session's 42 eval units were version-checked and found STALE, since
+dataset.py had gained `estimate_duration_seconds` and the feature hash
+covers dataset.py, so `--rebuild-stale` rebuilt all 98 eval units from 01:08;
+the staleness check worked as designed), then stage 2
+`train_seq_cnn.py --out runs/voice_guard_v12` (30 epochs, GPU), then stage 3
+`select_best_checkpoint_seqcnn.py` (select split only) → `validate_fp16.py`
+→ `evaluate.py --split test` scoring **v9_noisefix, v11_seqcnn and v12 on
+the same new protocol** (items 1–5 answered for the deployed model) with
+`--candidate v12 --reference v11`, report at
+`runs/eval_v12_test/report.md`. Logs: `model_training/pipeline_stage{1,2,3}.log`.
+
+**Tests:** full suite 116 passed (was 41 passed / 8 skipped before this
+session — the skips were data-dependent tests that now run thanks to the
+worktree's data junctions). Three defects found and fixed while verifying
+the prior session's uncommitted work: `train_seq_cnn.py` wrote list-of-Path
+args (`--real`/`--fake`) into train_config.json unserialized (end-to-end
+smoke test failed); `test_pipeline_smoke.py`'s 12-file toy corpus didn't
+always straddle val_fraction=0.34 (~1-in-130 flake; now sweeps split seeds
+until both sides populate); `check_corpus.py`'s --min-yield help text still
+said ">=3s" under the new 1 s cutoff.
+
+**Select-split baseline result (v9 + v11 re-scored on the new protocol,
+items 1–5 answered for the deployed model):** on the `select` half of the
+committed split, pooled over phone channels (34,140 windows / 3,734 files):
+v9 headline EER = 0.5013 [0.4926, 0.5115], v11 = 0.4800 [0.4714, 0.4883] —
+**both at chance, both FAIL the confound gates**. Per channel, v11: none
+0.0708 (its documented clean-audio number, reproducing), whatsapp 0.4608,
+volte 0.4476, cellular_3g 0.4669, gsm_2g 0.5008, pstn 0.4838,
+tandem_xnet 0.4937. **The deployed v11 model does not detect AI voice on
+phone-channel audio at all** — its accuracy lives entirely in clean-audio
+signatures the channel removes. v9 (clean-trained MLP) gets 0.2089 on
+`none` and is likewise at chance pooled over phone channels. This is the
+single most important number in the v12 effort so far: the user's clean-only-
+eval policy was not pedantry, it was hiding that the product does not work
+as a phone-call detector yet. v12 (trained with phone channels in the loop)
+is now the earliest candidate to actually beat chance on calls — see
+runs/eval_v9_v11_select/report.md for the full table.
+
+**Not done here, deliberately:** the deploy decision (item I). It gates on
+the report: v12 must pass the confound gates AND beat v11 on the test
+headline EER. If the attack-type head fails its gates (leave-attack-out
+balanced accuracy < 0.70 or MLAAD tts share < 0.70), the recommendation is
+to hide the sub-label, coordinated with the UI session
+(before touching call_screen.dart / assets/models/).
+
+## v12 RESULT (2026-09-12 05:05) — first model above chance on phone audio, NOT deployed (confound gates fail)
+
+Full report: `model_training/runs/eval_v12_test/report.md` (+ report.json).
+Pipeline ran unattended: caches (98 eval + 32 train units, 313k
+file-renditions), 30 epochs, selection on `select`, fp16 validation, then
+one scoring pass on `test` for v9 + v11 + v12.
+
+**Headline, test split, pooled over the six phone channels** (5,609 files /
+63,196 windows), 95% CI by file bootstrap:
+
+| model | EER | 95% CI | none (reference) | seen phone | unseen phone |
+|---|---|---|---|---|---|
+| v9 (MLP) | 0.5087 | [0.4993, 0.5185] | 0.2163 | 0.4930 | 0.5167 |
+| v11 (deployed) | 0.4853 | [0.4766, 0.4939] | 0.0788 | 0.4865 | 0.4899 |
+| **v12 (SeqTCN)** | **0.3223** | [0.3138, 0.3308] | 0.0624 | 0.2134 | 0.4015 |
+
+**DEPLOY DECISION: NO.** The gate (fixed before any model was scored) is
+confound-pass AND beat the reference. v12 beats v11 decisively — the CIs do
+not overlap, and it is the first model here that is not at chance on calls —
+but it FAILS 9 of 14 confound rows, so it does not ship. v11 stays deployed.
+Deploying a model that is still keyed to acoustic style would repeat the
+exact mistake this whole track exists to stop.
+
+What v12 changed and what it did not:
+- Trained with phone channels in the loop instead of clean-only. Per channel:
+  whatsapp 0.2036, volte 0.1586, pstn 0.2517, cellular_3g 0.2770, vs v11's
+  0.47-0.48 everywhere. So channel-matched training is what moved the needle.
+- **Unseen channels generalize far worse than seen ones** (0.4015 vs 0.2134;
+  gsm_2g 0.4469, tandem_xnet 0.3946). v12 learned these three channels more
+  than it learned channel-invariant speech. gsm_2g is the harshest codec and
+  the most likely real-world case.
+- **Accent cells stay at chance** for every model (en_native 0.4695,
+  hi_native 0.5142 for v12). Indian-accent generalization is untouched by
+  this work.
+- MLAAD (unseen modern TTS) FNR 40.4%, better than v11's 53.7% but still bad.
+- **Confound v2 fails.** Real side improved a lot (v11 failed 5 real rows
+  with ratios 1.35-1.76; v12 fails 3, ratios 1.25-1.56). The fake side got
+  WORSE and is now the problem: zcrVariance rate ratio 5.13 (FNR 53.7% on
+  the low half vs 10.5% on the high half, rho 0.544), jitter 3.21, hnr_db
+  2.59. v12 detects fakes largely by acoustic texture, not by speaker
+  identity — the entity-vs-style confound in `docs/CRITICAL-entity-vs-style-
+  confound.md`, now measured on the fake side and on phone audio.
+  `fake:pad_fraction` also fails (1.26), so padding is leaking slightly into
+  the fake decision; eval never rebalances padding by design.
+
+**Attack-type head PASSES both gates** (the first time): leave-attack-out
+balanced accuracy 0.763 (gate 0.70) and MLAAD tts share 74.3% (gate 0.70),
+against v11's 0.683 / 24.2%. In-distribution 0.921; the UI sub-label, when
+shown, is right 81.7% of the time on the leave-out attacks. **So the
+sub-label does not need hiding** — but it is moot until a model ships, since
+the head that passes is v12's and v12 is not deploying.
+
+fp16 cache storage validated: max |dp| 8.7e-4 (v11) and 2.1e-4 (v9) against
+the 0.01 gate, zero decision flips at either threshold.
+
+Training-time val EER (0.184 phone) vs held-out (0.322) is a 14-point
+generalization gap: val files come from the training sources, so training
+val is not a substitute for the held-out split.
+
+**Next:** `docs/superpowers/plans/2026-09-12-post-v12-plan.md` — the
+acoustic-loop `playback` channel that upstream added (the on-device failure
+mode), precise cache invalidation, then a v13 that must fix the fake-side
+confound rather than only adding channels. Unseen-channel generalization and
+the accent cells are the two other open fronts.
+
 ## How to keep this file useful
 
 - Update the "Current status" date and paragraph at the *start* of a

@@ -50,3 +50,5 @@ app.*.map.json
 model_training/.venv313/
 model_training/.venv_tts/
 model_training/data/*/
+# feature caches (feature_cache.py): multi-GB, fully rebuildable
+model_training/cache/

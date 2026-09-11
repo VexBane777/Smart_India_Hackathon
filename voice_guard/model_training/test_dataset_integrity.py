@@ -8,10 +8,10 @@ attempt2, ablation, english_only) regressed cross-generator held-out EER
 despite ever-larger training sets. Root causes found and fixed in that
 session, each with a regression test here so it can't silently recur:
 
-  1. `features.chunk_audio` silently drops any clip <3s — fine on its own
-     (matches the real 3s on-device inference window), but nobody was
-     measuring how unevenly that drop hits different sources (69% of
-     ASVspoof2021-fake, ~0% of some accent cells) until this session.
+  1. `features.chunk_audio` silently dropped any clip <3s, unevenly by
+     source (69% of ASVspoof2021-fake, ~0% of some accent cells). Replaced
+     2026-09-11 (v12) by dataset.process_file's padding contract; see
+     test_windowing.py.
   2. `dataset.split_by_source` used to key on bare filename, not full path —
      a latent cross-directory collision risk (no observed collisions in the
      current corpus, but the bug was real regardless).
@@ -49,10 +49,10 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from dataset import Example, build_examples, split_by_source
+from dataset import Window, build_examples, split_by_source
 from dataset_audit import audit_directory_pair, find_acoustic_shortcuts, find_technical_shortcuts
-from features import SAMPLE_RATE, chunk_audio
-from train import parse_channel_arg
+from eval_protocol import parse_channel_arg
+from features import SAMPLE_RATE
 
 MODEL_TRAINING_DIR = Path(__file__).resolve().parent
 DATA_DIR = MODEL_TRAINING_DIR / "data"
@@ -68,18 +68,13 @@ def _skip_if_missing(*dirs: Path):
         pytest.skip(f"corpus dir(s) not present in this checkout: {missing}")
 
 
-# --- 1. chunk_audio's <3s cutoff: explicit, documented contract ------------
+# --- 1. windowing: see test_windowing.py (v12 padding contract) ------------
 
-def test_chunk_audio_drops_short_clips():
-    short = np.zeros(int(2.9 * SAMPLE_RATE), dtype=np.float32)
-    assert chunk_audio(short) == []
+def test_features_module_no_longer_has_a_silent_3s_cutoff():
+    import features
 
-
-def test_chunk_audio_keeps_clips_at_or_above_3s():
-    exact = np.zeros(3 * SAMPLE_RATE, dtype=np.float32)
-    assert len(chunk_audio(exact)) == 1
-    long = np.zeros(7 * SAMPLE_RATE, dtype=np.float32)
-    assert len(chunk_audio(long)) == 2  # floor(7/3), remainder dropped, not padded
+    assert not hasattr(features, "chunk_audio"), (
+        "chunk_audio (drop every clip <3 s) is back; windowing belongs to dataset.process_file")
 
 
 # --- 2. split_by_source: full path, not basename ---------------------------
@@ -101,7 +96,7 @@ def test_split_by_source_keys_on_full_path_not_basename(tmp_path: Path):
     fake_dir.mkdir()
 
     examples = build_examples([dir_a, dir_b], fake_dir, channel_recipes=[None])
-    source_files = {e.source_file for e in examples}
+    source_files = {e.file_id for e in examples}
     assert len(source_files) == 2, (
         f"expected 2 distinct sources (one per directory), got {source_files} — "
         "split_by_source's basename-keying bug has regressed."
@@ -110,12 +105,14 @@ def test_split_by_source_keys_on_full_path_not_basename(tmp_path: Path):
 
 def test_split_by_source_never_shares_a_source_across_train_and_val():
     examples = [
-        Example(lfcc_seq=np.zeros((10, 60), dtype=np.float32), scalars=np.zeros(6, dtype=np.float32),
-                label=0, attack_type=-100, source_file=f"/a/{i}.wav", source_dir="/a")
-        for i in range(20)
+        Window(lfcc_seq=np.zeros((10, 60), dtype=np.float32), scalars=np.zeros(6, dtype=np.float32),
+               label=0, attack_type=-100, attack_id=0, file_id=f"/a/{i // 2}.wav", source_set="/a",
+               channel=ch, window_index=0, pad_fraction=0.0, duration=3.0)
+        for i, ch in zip(range(40), ["none", "pstn"] * 20)
     ]
     train_ex, val_ex = split_by_source(examples, val_fraction=0.3)
-    assert {e.source_file for e in train_ex} & {e.source_file for e in val_ex} == set()
+    assert train_ex and val_ex
+    assert {e.file_id for e in train_ex} & {e.file_id for e in val_ex} == set()
 
 
 # --- 3. TeleChannel recipe semantics ----------------------------------------
@@ -124,10 +121,10 @@ def test_none_channel_recipe_is_a_true_noop():
     from telechannel.pipeline import process_clip
 
     pcm = (0.2 * np.sin(2 * np.pi * 220 * np.linspace(0, 1, SAMPLE_RATE))).astype(np.float32)
-    # dataset._maybe_channel short-circuits on recipe is None without ever
+    # dataset.apply_channel short-circuits on recipe is None without ever
     # calling process_clip — this test documents that contract directly.
-    from dataset import _maybe_channel
-    out = _maybe_channel(pcm, None, np.random.default_rng(0))
+    from dataset import apply_channel
+    out = apply_channel(pcm, None, np.random.default_rng(0))
     assert np.array_equal(out, pcm)
 
 
@@ -143,8 +140,8 @@ def test_clean_recipe_is_not_a_noop():
     out = process_clip(pcm, "clean", SAMPLE_RATE, rng=np.random.default_rng(0))
     assert not np.allclose(out, pcm, atol=1e-3), (
         "'clean' produced (near-)identical output to the input — if TeleChannel's "
-        "'clean' recipe has genuinely become a no-op, update train.py's --channel "
-        "help text and the WARNING it prints, and this test's assumption."
+        "'clean' recipe has genuinely become a no-op, update eval_protocol.py's "
+        "FORBIDDEN_RECIPES rationale and this test's assumption."
     )
 
 

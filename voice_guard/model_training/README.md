@@ -78,21 +78,35 @@ Normalization (mean/std) is baked into the exported model itself
 preprocessing step on the Dart side to apply it, so it has to travel
 inside the graph.
 
-## Pipeline
+## Pipeline (v12, 2026-09-11)
+
+**Read `../docs/EVAL-PROTOCOL.md` first.** It is the policy (no clean-only
+eval or training unless `--application bank`), the held-out splits, the
+windowing contract, the metrics and the deploy gates. The code enforces it.
 
 ```
-dataset.py   — real/ + fake/ WAV dirs -> (features, label) examples,
-                split at the SOURCE FILE level (no chunk leakage),
-                optional TeleChannel degradation (--channel whatsapp ...)
-model.py     — VoiceGuardMLP: FixedNormalize -> 66->64->32->2 MLP
-train.py     — trains, reports EER per epoch, exports model.onnx
-export_tflite.py — model.onnx -> voice_detector.tflite (needs tensorflow +
-                onnx2tf — NOT installed on the CPU dev laptop this was
-                written on; run on whichever machine has room for it)
-test_pipeline_smoke.py — synthetic-data smoke test (mechanics only, not
-                accuracy) proving the pipeline runs before pointing it at
-                a real corpus
+eval_protocol.py  channel policy: resolve_channels(), CleanOnlyEvalError, channel groups
+dataset.py        audio -> 3 s windows (short clips padded, tail windows, pad_fraction),
+                  stable per-file seeds, pad balancing for training
+features.py       LFCC sequence + 6 scalars; numpy mirror of lib/utils/audio_processor.dart
+feature_cache.py  sharded on-disk memmap cache with a feature-version hash (StaleCacheError)
+corpus.py         committed training sets (TRAIN_SETS_V12) + eval sets, train channel assignment
+make_eval_splits.py  writes eval_splits/held_out_split_v1.json (select/test), refuses overwrite
+build_caches.py   builds eval/train caches ahead of time (resumable)
+model.py          VoiceGuardSeqTCN (v12), VoiceGuardSeqCNN (v11), MLP (v9, scoring only),
+                  build_model_from_norm_stats / load_scoring_model / export_onnx
+train_seq_cnn.py  cache-backed training (AdamW, warmup+cosine, EMA, leave-attack-out)
+select_best_checkpoint_seqcnn.py  epoch selection on the `select` split ONLY
+evaluate.py       the one eval harness -> report.json + report.md
+validate_fp16.py  checks float16 cache storage doesn't move model outputs
+eval_stats.py     compute_eer (vectorized), bootstrap CIs, Spearman, AUC, balanced accuracy
+check_corpus.py / dataset_audit.py  pre-training corpus shortcut audits
 ```
+
+Retired 2026-09-11, with no drop-in replacement needed: train.py (MLP),
+train_curriculum.py, eval_held_out*.py, measure_confound*.py,
+select_best_checkpoint.py, eval_accent_cells.py, export_tflite.py (see the
+EVAL-PROTOCOL.md §8 table for where each went).
 
 ## Getting real training data
 
@@ -179,40 +193,34 @@ than ~25 minutes — background tasks got silently killed mid-download at
 that mark during the v3 run, twice, corrupting the target file both times.
 Verify with `unzip -t` before trusting a large download.
 
-## Run
+## Run (v12)
 
-The full `voice_guard_v3` command (2019 LA degraded + 2021 LA/2019 dev clean
-+ In-the-Wild training split clean, GPU-accelerated MLP step):
+Python: the main checkout's `.venv313` (torch cu128, soundfile, librosa,
+onnxruntime, pytest). The PATH `python` has no soundfile. Caches default to
+`model_training/cache` (gitignored) or `$VOICEGUARD_CACHE_ROOT`. Put them in
+the main checkout, not a throwaway worktree.
 
 ```bash
-# preflight: cheap, catches uneven chunk-yield and technical shortcuts
-# BEFORE the 20-40 minute feature-extraction + training job below.
-python check_corpus.py --pair data/real data/fake \
-    --pair data/real2021 data/fake2021 --pair data/real_itw_train data/fake_itw_train
-
-python train.py --real data/real --fake data/fake \
-    --real-clean data/real2021 data/real_itw_train \
-    --fake-clean data/fake2021 data/fake_itw_train \
-    --out runs/voice_guard_v3 --epochs 30 \
-    --channel whatsapp volte none --device auto --workers 8
-cp runs/voice_guard_v3/model.onnx ../assets/models/voice_detector.onnx
-
-# then check it actually generalizes, not just fits ASVspoof — and gate on it:
-python eval_held_out_dirs.py --model runs/voice_guard_v3/model.pt \
-    --real data/real_itw_held --fake data/fake_itw_held \
-    --baseline-eer 0.1624   # fails loudly instead of silently shipping a regression
+python check_corpus.py --pair data/real data/fake --pair data/real2021 data/fake2021 \
+    --pair data/real_itw_train data/fake_itw_train          # cheap shortcut preflight
+python build_caches.py --eval                               # ~25 min, resumable
+python build_caches.py --train                              # ~1.5-2 h, resumable
+python train_seq_cnn.py --out runs/voice_guard_v12          # 30 epochs, GPU
+python select_best_checkpoint_seqcnn.py --run runs/voice_guard_v12 --out runs/voice_guard_v12_selected
+python evaluate.py --split test --out runs/eval_v12_test \
+    --model v9=runs/voice_guard_v9_noisefix_final/model.pt \
+    --model v11=runs/voice_guard_v11_seqcnn_selected/model.pt \
+    --model v12=runs/voice_guard_v12_selected/model.pt \
+    --attack-val-run runs/voice_guard_v12 --candidate v12 --reference v11
+# deploy only if report.md's decision says so:
+cp runs/voice_guard_v12_selected/model.onnx ../assets/models/voice_detector.onnx
 ```
 
-Note: this documented command uses `none` (a real no-op), not `clean` — see
-the warning above. `train.py`'s own note about the historical v3 model: its
-training log printed `channels=['whatsapp', 'volte', None]`, i.e. it likely
-*already* used a true no-op for that slot despite this file previously
-(wrongly) documenting `clean` — meaning this corrected command is closer to
-what actually produced the deployed model's weights than the old docs were,
-though the exact historical invocation couldn't be fully reconstructed.
-
-`--workers` on Windows: keep it well under your core count if you're on a
-16GB-RAM machine — see the `ProcessPoolExecutor` gotcha below.
+Long jobs on Windows: launch detached (PowerShell `Start-Process
+-WindowStyle Hidden -RedirectStandardError log`). Tool-managed background
+jobs have been killed at ~25 min before. `--workers 10` is safe on this
+16 GB / 20-thread machine because workers never import torch (keep it that
+way: see the gotcha above).
 
 **2026-09-09: the app now runs `model.onnx` directly via `flutter_onnxruntime`**
 (`lib/services/src/tflite_io.dart`), not a converted `.tflite`. `export_tflite.py`
@@ -279,18 +287,12 @@ data" commands above):
 
 ## Known gaps (deliberate, not oversights)
 
-- No CNN/temporal model — the feature vector is already mean-pooled (no
-  time axis survives), so a small MLP is the right-sized model; a
-  CNN/MobileNet would need frame-level features and a matching change to
-  `audio_processor.dart`, out of scope for this pass.
-- `export_tflite.py` always picks the float32 TFLite variant, not the
-  int8-quantized one `backend/main.py`'s response labels
-  (`"mobilenetv3-small-int8-demo-v0.1"`) imply — that name is currently
-  just a placeholder string, not a real model description. Quantization
-  is a follow-up once a float32 model's accuracy is known to be worth
-  preserving through int8.
-- Cross-generator held-out eval now exists (In-the-Wild speaker-disjoint
-  split, see above) but master plan §5.4's other three protocols — unseen
-  codec, unseen noise, real recorded calls — are still not covered. Still
-  fine for "a real model exists, and we know its real-world number," not
-  yet "the leaderboard story."
+- `backend/main.py`'s response label (`"mobilenetv3-small-int8-demo-v0.1"`)
+  is a placeholder string, not a model description. The shipped model is
+  float32 ONNX; no quantization has been done.
+- Covered since v12: unseen generators (MLAAD) and unseen codecs/channels
+  (gsm_2g, pstn, tandem_xnet are never trained on). Still not covered:
+  **real recorded phone calls** (master plan §5.4). Every channel here is
+  TeleChannel-simulated.
+- In-the-Wild select/test is file-level, not speaker-level (meta.csv is
+  gone). See EVAL-PROTOCOL.md §3.
