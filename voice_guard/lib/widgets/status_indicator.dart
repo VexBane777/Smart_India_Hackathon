@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../utils/constants.dart';
+import '../design/tokens.dart';
 
 class StatusIndicator extends StatelessWidget {
   final bool active;
@@ -7,27 +7,43 @@ class StatusIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = active ? AppColors.verified : Colors.grey;
+    final color = active ? ShadTokens.verified : ShadTokens.muted;
+    final bg = active ? ShadTokens.verifiedBg : ShadTokens.secondary;
+    final borderColor = active ? ShadTokens.verifiedBorder : ShadTokens.border;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: active ? AppColors.verifiedBg : const Color(0xFFEEEEEE),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
+        color: bg,
+        borderRadius: BorderRadius.circular(ShadTokens.radiusFull),
+        border: Border.all(color: borderColor),
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: 10, height: 10,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-            boxShadow: active ? [BoxShadow(color: color.withValues(alpha: 0.5), blurRadius: 6)] : null,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              boxShadow: active
+                  ? [BoxShadow(color: color.withValues(alpha: 0.5), blurRadius: 4)]
+                  : null,
+            ),
           ),
-        ),
-        const SizedBox(width: 8),
-        Text(active ? 'Protection Active' : 'Protection Inactive',
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: active ? AppColors.verified : Colors.black54)),
-      ]),
+          const SizedBox(width: 6),
+          Text(
+            active ? 'System Protected' : 'Protection Paused',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
+              color: active ? ShadTokens.verified : ShadTokens.muted,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -35,18 +51,28 @@ class StatusIndicator extends StatelessWidget {
 class ShieldIcon extends StatelessWidget {
   final bool active;
   final double size;
-  const ShieldIcon({super.key, required this.active, this.size = 64});
+  const ShieldIcon({super.key, required this.active, this.size = 56});
 
   @override
   Widget build(BuildContext context) {
+    final color = active ? ShadTokens.verified : ShadTokens.muted;
+    final bg = active ? ShadTokens.verifiedBg : ShadTokens.secondary;
+    final borderColor = active ? ShadTokens.verifiedBorder : ShadTokens.border;
+
     return Container(
-      width: size, height: size,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
-        color: active ? AppColors.verifiedBg : const Color(0xFFEEEEEE),
+        color: bg,
         shape: BoxShape.circle,
-        border: Border.all(color: (active ? AppColors.verified : Colors.grey).withValues(alpha: 0.35), width: 2),
+        border: Border.all(color: borderColor, width: 1.5),
+        boxShadow: ShadTokens.shadowSm,
       ),
-      child: Icon(Icons.shield_rounded, size: size * 0.52, color: active ? AppColors.verified : Colors.grey),
+      child: Icon(
+        Icons.shield_rounded,
+        size: size * 0.52,
+        color: color,
+      ),
     );
   }
 }
