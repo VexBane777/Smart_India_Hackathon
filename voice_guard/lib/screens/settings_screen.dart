@@ -3,7 +3,9 @@ import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../providers/settings_provider.dart';
+import '../providers/calibration_provider.dart';
 import '../services/call_service.dart';
+import '../services/audio_service.dart';
 import '../utils/permissions.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -17,6 +19,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isDefaultDialer = false;
   bool _hasOverlay = false;
   bool _hasPhonePerms = false;
+  bool _calibrating = false;
+
+  /// Voice calibration flow (re-wired after the PR #8 merge dropped the old
+  /// settings section): starts native capture + scoring, records ~8 windows
+  /// of the user's own speech, and stores the mean/std baseline on-device.
+  Future<void> _runCalibration() async {
+    setState(() => _calibrating = true);
+    final calls = context.read<CallService>();
+    final audio = context.read<AudioService>();
+    final calib = context.read<CalibrationProvider>();
+    try {
+      audio.clearBuffer();
+      audio.startScoring();
+      await calls.startCallDetection();
+      final sample = await audio.captureCalibrationSample();
+      await calls.stopCallDetection();
+      audio.stopScoring();
+      if (sample.windowsCaptured < 4) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              backgroundColor: Color(0xFF18181B),
+              content: Text('Not enough speech captured — try again somewhere quieter.',
+                  style: TextStyle(color: Colors.white)),
+            ),
+          );
+        }
+        return;
+      }
+      await calib.setBaseline(sample.mean, sample.std);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Color(0xFF18181B),
+            content: Text('Voice calibration saved.',
+                style: TextStyle(color: Colors.white)),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _calibrating = false);
+    }
+  }
 
   @override
   void initState() {
@@ -89,6 +134,154 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: (v) => s.setSound(v),
                   ),
                 ],
+              ),
+            ),
+            const SizedBox(height: 28),
+
+            // ── Section 1b: DETECTION (sensitivity + calibration, re-wired
+            // from the pre-merge vaani settings screen) ──
+            _sectionLabel('DETECTION'),
+            const SizedBox(height: 10),
+
+            // Sensitivity threshold slider
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF18181B),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFF27272A), width: 1),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        'Detection Threshold',
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF131315),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          s.sensitivity.toStringAsFixed(2),
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF10B981),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: s.sensitivity.clamp(0.50, 0.90),
+                    min: 0.50,
+                    max: 0.90,
+                    divisions: 8,
+                    label: s.sensitivity.toStringAsFixed(2),
+                    activeColor: const Color(0xFF10B981),
+                    onChanged: (v) => s.setSensitivity(v),
+                  ),
+                  Text(
+                    'Lower = more sensitive (more alerts). Maps to "configurable thresholds per scenario" in the SIH brief.',
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      color: const Color(0xFF8E9192),
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Voice calibration card
+            Consumer<CalibrationProvider>(
+              builder: (context, calib, _) => Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF18181B),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFF27272A), width: 1),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          calib.isCalibrated ? LucideIcons.badgeCheck : LucideIcons.mic,
+                          size: 18,
+                          color: calib.isCalibrated ? const Color(0xFF10B981) : const Color(0xFF8E9192),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            calib.isCalibrated
+                                ? 'Calibrated — alerts are tuned to your voice.'
+                                : 'Not calibrated — using the default alert threshold.',
+                            style: GoogleFonts.inter(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Records ~10 seconds of you speaking normally, on-device only, to tune the alert line to your natural speaking style. Nothing is uploaded.',
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        color: const Color(0xFF8E9192),
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: _calibrating ? null : _runCalibration,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: Colors.black,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                          ),
+                          icon: _calibrating
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                              : const Icon(LucideIcons.mic, size: 16),
+                          label: Text(
+                            _calibrating
+                                ? 'Listening...'
+                                : (calib.isCalibrated ? 'Recalibrate' : 'Calibrate My Voice'),
+                            style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        if (calib.isCalibrated) ...[
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: _calibrating ? null : () => calib.clearBaseline(),
+                            child: const Text('Reset',
+                                style: TextStyle(color: Color(0xFF8E9192))),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 28),

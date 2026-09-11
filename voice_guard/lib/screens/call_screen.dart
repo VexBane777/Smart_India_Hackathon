@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../providers/call_state_provider.dart';
 import '../providers/risk_score_provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/calibration_provider.dart';
 import '../services/call_service.dart';
 import '../services/audio_service.dart';
 import '../services/notification_service.dart';
@@ -37,8 +38,11 @@ class _CallScreenState extends State<CallScreen> {
   StreamSubscription<double>? _scoreSub;
   StreamSubscription<List<double>>? _pcmSub;
   StreamSubscription<bool>? _signalSub;
+  StreamSubscription<(String?, double)>? _attackTypeSub;
   Timer? _captureStatusTimer;
   CaptureStatus? _captureStatus;
+  String? _attackType;
+  double _attackConfidence = 0.0;
 
   @override
   void initState() {
@@ -79,18 +83,24 @@ class _CallScreenState extends State<CallScreen> {
     final settings = context.read<SettingsProvider>();
     final calls = context.read<CallService>();
     final notifs = context.read<NotificationService>();
+    final calibration = context.read<CalibrationProvider>();
 
     _scoreSub = audio.scoreStream.listen((score) async {
       if (!mounted) return;
       final wasAlert = riskProvider.isAlert;
-      riskProvider.update(score);
+      // Per-speaker calibration shifts where the alert line is drawn; when
+      // uncalibrated this is just settings.sensitivity (see
+      // CalibrationProvider.computeThreshold).
+      final effectiveThreshold = calibration.effectiveThreshold(settings.sensitivity);
+      riskProvider.update(score, alertThreshold: effectiveThreshold);
       final cur = riskProvider.current;
       debugPrint('Monitor: raw=${score.toStringAsFixed(3)} ema=${cur?.score.toStringAsFixed(3)} '
-          'state=${riskProvider.state} label=${cur?.label}');
+          'state=${riskProvider.state} label=${cur?.label} threshold=${effectiveThreshold.toStringAsFixed(3)}');
       if (!wasAlert && riskProvider.isAlert) {
-        debugPrint('Monitor: ALERT fired — ema=${cur?.score.toStringAsFixed(3)} sensitivity=${settings.sensitivity}');
+        debugPrint('Monitor: ALERT fired — ema=${cur?.score.toStringAsFixed(3)} '
+            'threshold=${effectiveThreshold.toStringAsFixed(3)} sensitivity=${settings.sensitivity}');
       }
-      if (cur != null && cur.score > settings.sensitivity) {
+      if (cur != null && cur.score > effectiveThreshold) {
         if (settings.overlayEnabled) {
           try { await calls.showOverlay(riskScore: cur.score, verdict: cur.label); } catch (_) {}
         }
@@ -109,6 +119,15 @@ class _CallScreenState extends State<CallScreen> {
       if (!mounted) return;
       riskProvider.setHasSignal(hasSignal);
     });
+
+    _attackTypeSub = audio.attackTypeStream.listen((event) {
+      if (!mounted) return;
+      final (attackType, attackConfidence) = event;
+      setState(() {
+        _attackType = attackType;
+        _attackConfidence = attackConfidence;
+      });
+    });
   }
 
   @override
@@ -116,6 +135,7 @@ class _CallScreenState extends State<CallScreen> {
     _scoreSub?.cancel();
     _pcmSub?.cancel();
     _signalSub?.cancel();
+    _attackTypeSub?.cancel();
     _captureStatusTimer?.cancel();
     super.dispose();
   }
@@ -270,6 +290,34 @@ class _CallScreenState extends State<CallScreen> {
     setState(() => _micMuted = res);
   }
 
+  /// The AppBar's red control is labeled "Stop Live Monitor", so it must only
+  /// ever STOP things — never start them (Codex review on PR #8: during a
+  /// carrier call with `_liveMicActive == false` it used to fall through to
+  /// `_toggleLiveMic`'s start path, overwriting the displayed call state with
+  /// "Live Acoustic Scanner" and starting capture).
+  Future<void> _onAppBarStopTap() async {
+    // 1) Live Mic self-test session — tear it down entirely; _endCall also
+    //    writes the call log and restores the dialpad view.
+    if (_liveMicActive) {
+      await _endCall();
+      return;
+    }
+    // 2) Carrier call with the opt-in acoustic monitor armed — stop it
+    //    (detection, scoring, capture-status polling) but keep the call.
+    if (_detectionActive) {
+      await _toggleDetection();
+      return;
+    }
+    // 3) Nothing armed by the user, but the telecom callback in main.dart may
+    //    still be driving ambient scoring for this call. Shut that down and
+    //    dismiss any live risk overlay so the monitor is fully quiet.
+    final audio = context.read<AudioService>();
+    audio.stopScoring();
+    try {
+      await context.read<CallService>().hideOverlay();
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     final call = context.watch<CallStateProvider>();
@@ -307,7 +355,7 @@ class _CallScreenState extends State<CallScreen> {
                     ),
                     child: const Icon(LucideIcons.square, size: 16, color: Colors.white),
                   ),
-                  onPressed: _toggleLiveMic,
+                  onPressed: _onAppBarStopTap,
                 ),
                 const SizedBox(width: 8),
               ],
@@ -476,9 +524,27 @@ class _CallScreenState extends State<CallScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      verdict,
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color),
+                    Row(
+                      children: [
+                        Text(
+                          verdict,
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color),
+                        ),
+                        if (_attackTypeSubLabel(verdict) case final String subLabel) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              subLabel,
+                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -830,7 +896,7 @@ class _CallScreenState extends State<CallScreen> {
             width: 50,
             height: 50,
             decoration: BoxDecoration(
-              color: active ? ShadTokens.primary : Colors.white,
+              color: active ? ShadTokens.primary : const Color(0xFF27272A),
               shape: BoxShape.circle,
               border: Border.all(
                 color: active ? ShadTokens.primary : ShadTokens.border,
@@ -838,6 +904,10 @@ class _CallScreenState extends State<CallScreen> {
             ),
             child: Icon(
               icon,
+              // Inactive controls sit on a dark zinc circle, so their icons
+              // must stay white; the old Colors.white background +
+              // ShadTokens.foreground (white) icon rendered a blank circle
+              // (Codex review on PR #8).
               color: active ? ShadTokens.primaryFg : ShadTokens.foreground,
               size: 22,
             ),
@@ -850,6 +920,24 @@ class _CallScreenState extends State<CallScreen> {
         ),
       ],
     );
+  }
+
+  /// Sub-label shown alongside "AI DETECTED" — never standalone, never
+  /// below the confidence threshold (see
+  /// docs/superpowers/specs/2026-09-11-attack-type-differentiator-design.md §6).
+  String? _attackTypeSubLabel(String verdict) {
+    const confidenceThreshold = 0.70; // draft value from the design spec §6, tune during on-device testing
+    if (verdict != 'AI DETECTED' || _attackType == null || _attackConfidence < confidenceThreshold) {
+      return null;
+    }
+    switch (_attackType) {
+      case 'tts':
+        return 'TTS';
+      case 'vc':
+        return 'VOICE CLONE';
+      default:
+        return 'SYNTHETIC';
+    }
   }
 
   String _adviceFor(String verdict) {

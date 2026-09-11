@@ -26,8 +26,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    // AppBar title is "Vaani" once onboarding is dismissed
-    expect(find.text('Vaani'), findsOneWidget);
+    // Home AppBar title after the PR #8 Figma redesign ("SYSTEM STATUS",
+    // formerly "Vaani")
+    expect(find.text('SYSTEM STATUS'), findsOneWidget);
   });
 
   testWidgets('Providers wire correctly', (WidgetTester tester) async {
