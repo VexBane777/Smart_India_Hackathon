@@ -1563,6 +1563,19 @@ docstrings stripped), channels.yaml, library versions and the ffmpeg build;
 opening or building over a stale unit raises `StaleCacheError` — staleness
 is loud. fp16's effect on outputs is measured by `validate_fp16.py`
 (gate max |dp| <= 0.01), not assumed.
+
+**Model/training (review items 6–7):** `VoiceGuardSeqTCN` ("seqtcn_v2"):
+dilated residual TCN, receptive field 65 frames (~1.1 s, vs v11's ~130 ms),
+mean+std+max pooling, ~87k params, same ONNX I/O contract as v11 (Dart side
+unchanged). Training: cache-backed, AdamW wd 0.01, 1-epoch warmup + cosine
+decay, 30 epochs, batch 256, EMA 0.999 saved per epoch, class-weighted CE,
+label smoothing 0.05, attack-type loss weight 0.5. **Leave-attack-out:**
+A11 (TTS) and A18 (VC) are masked from the attack-type loss so the head can
+be scored on systems it never saw labels for. Every fake carries its attack
+ID (A01–A19) where the corpus knows it (ASVspoof2019 train protocol for
+data/fake, trial_metadata.txt for fake2021; ITW/CodecFake stay "unknown"
+and are masked).
+
 **Legacy scripts retired (review item 11), with where each went:**
 - train.py (MLP), train_curriculum.py: replaced by train_seq_cnn.py
   (cache-backed; the MLP architecture stays in model.py only for scoring
@@ -1591,8 +1604,10 @@ manifest — nothing is silently lost.
 **Pipeline status (this session, Task Scheduler chain — tool-launched
 background jobs got reaped at the 30 s shell cap on this box; scheduled
 tasks survive):** stage 1 `build_caches.py --eval` then `--train` (the
-earlier session had already built 42 eval units; they were version-checked
-and reused, remaining test-split units built in minutes), then stage 2
+earlier session's 42 eval units were version-checked and found STALE, since
+dataset.py had gained `estimate_duration_seconds` and the feature hash
+covers dataset.py, so `--rebuild-stale` rebuilt all 98 eval units from 01:08;
+the staleness check worked as designed), then stage 2
 `train_seq_cnn.py --out runs/voice_guard_v12` (30 epochs, GPU), then stage 3
 `select_best_checkpoint_seqcnn.py` (select split only) → `validate_fp16.py`
 → `evaluate.py --split test` scoring **v9_noisefix, v11_seqcnn and v12 on
@@ -1619,8 +1634,8 @@ v9 headline EER = 0.5013 [0.4926, 0.5115], v11 = 0.4800 [0.4714, 0.4883] —
 volte 0.4476, cellular_3g 0.4669, gsm_2g 0.5008, pstn 0.4838,
 tandem_xnet 0.4937. **The deployed v11 model does not detect AI voice on
 phone-channel audio at all** — its accuracy lives entirely in clean-audio
-signatures the channel removes. v9 (clean-trained MLP) is at chance even on
-`none` (0.2089 there, chance pooled) under the confound gates. This is the
+signatures the channel removes. v9 (clean-trained MLP) gets 0.2089 on
+`none` and is likewise at chance pooled over phone channels. This is the
 single most important number in the v12 effort so far: the user's clean-only-
 eval policy was not pedantry, it was hiding that the product does not work
 as a phone-call detector yet. v12 (trained with phone channels in the loop)
@@ -1633,19 +1648,6 @@ headline EER. If the attack-type head fails its gates (leave-attack-out
 balanced accuracy < 0.70 or MLAAD tts share < 0.70), the recommendation is
 to hide the sub-label, coordinated with the UI session
 (before touching call_screen.dart / assets/models/).
-
-
-**Model/training (review items 6–7):** `VoiceGuardSeqTCN` ("seqtcn_v2"):
-dilated residual TCN, receptive field 65 frames (~1.1 s, vs v11's ~130 ms),
-mean+std+max pooling, ~87k params, same ONNX I/O contract as v11 (Dart side
-unchanged). Training: cache-backed, AdamW wd 0.01, 1-epoch warmup + cosine
-decay, 30 epochs, batch 256, EMA 0.999 saved per epoch, class-weighted CE,
-label smoothing 0.05, attack-type loss weight 0.5. **Leave-attack-out:**
-A11 (TTS) and A18 (VC) are masked from the attack-type loss so the head can
-be scored on systems it never saw labels for. Every fake carries its attack
-ID (A01–A19) where the corpus knows it (ASVspoof2019 train protocol for
-data/fake, trial_metadata.txt for fake2021; ITW/CodecFake stay "unknown"
-and are masked).
 
 ## How to keep this file useful
 
