@@ -33,8 +33,11 @@ class _CallScreenState extends State<CallScreen> {
   StreamSubscription<double>? _scoreSub;
   StreamSubscription<List<double>>? _pcmSub;
   StreamSubscription<bool>? _signalSub;
+  StreamSubscription<(String?, double)>? _attackTypeSub;
   Timer? _captureStatusTimer;
   CaptureStatus? _captureStatus;
+  String? _attackType;
+  double _attackConfidence = 0.0;
 
   @override
   void initState() {
@@ -107,6 +110,26 @@ class _CallScreenState extends State<CallScreen> {
       if (!mounted) return;
       riskProvider.setHasSignal(hasSignal);
     });
+
+    _attackTypeSub = audio.attackTypeStream.listen((event) {
+      if (!mounted) return;
+      final (attackType, attackConfidence) = event;
+      setState(() {
+        _attackType = attackType;
+        _attackConfidence = attackConfidence;
+      });
+    });
+  }
+
+  /// Sub-label shown alongside "AI DETECTED" — never standalone, never
+  /// below the confidence threshold (see
+  /// docs/superpowers/specs/2026-09-11-attack-type-differentiator-design.md §6).
+  String? _attackTypeSubLabel(String verdict) {
+    const confidenceThreshold = 0.70; // draft value from the design spec §6, tune during on-device testing
+    if (verdict != 'AI DETECTED' || _attackType == null || _attackConfidence < confidenceThreshold) {
+      return null;
+    }
+    return _attackType == 'vc' ? 'Voice conversion' : 'Synthetic voice';
   }
 
   @override
@@ -114,6 +137,7 @@ class _CallScreenState extends State<CallScreen> {
     _scoreSub?.cancel();
     _pcmSub?.cancel();
     _signalSub?.cancel();
+    _attackTypeSub?.cancel();
     _captureStatusTimer?.cancel();
     super.dispose();
   }
@@ -482,7 +506,17 @@ class _CallScreenState extends State<CallScreen> {
             Icon(verdict == 'AI DETECTED' ? Icons.warning_rounded : verdict == 'SUSPICIOUS' ? Icons.error_outline : Icons.verified_user_rounded, color: color, size: 28),
             const SizedBox(width: 10),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(verdict, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: color)),
+              Row(children: [
+                Text(verdict, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: color)),
+                if (_attackTypeSubLabel(verdict) case final String subLabel) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)),
+                    child: Text(subLabel, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color)),
+                  ),
+                ],
+              ]),
               const SizedBox(height: 2),
               Text(_adviceFor(verdict), style: TextStyle(fontSize: 11, color: Colors.black.withValues(alpha: 0.7), height: 1.3)),
             ])),
