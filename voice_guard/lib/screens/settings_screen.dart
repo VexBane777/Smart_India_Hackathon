@@ -7,6 +7,10 @@ import '../providers/calibration_provider.dart';
 import '../services/call_service.dart';
 import '../services/audio_service.dart';
 import '../utils/permissions.dart';
+import '../widgets/shad_card.dart';
+import '../widgets/shad_toggle.dart';
+import '../widgets/shad_button.dart';
+import '../design/tokens.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -40,7 +44,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              backgroundColor: Color(0xFF18181B),
+              backgroundColor: ShadTokens.surface,
               content: Text('Not enough speech captured — try again somewhere quieter.',
                   style: TextStyle(color: Colors.white)),
             ),
@@ -52,7 +56,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            backgroundColor: Color(0xFF18181B),
+            backgroundColor: ShadTokens.surface,
             content: Text('Voice calibration saved.',
                 style: TextStyle(color: Colors.white)),
           ),
@@ -88,7 +92,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final s = context.watch<SettingsProvider>();
 
     return Scaffold(
-      backgroundColor: const Color(0xFF131315),
+      backgroundColor: ShadTokens.background,
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -100,7 +104,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 fontSize: 28,
                 fontWeight: FontWeight.w800,
                 letterSpacing: -0.5,
-                color: Colors.white,
+                color: ShadTokens.foreground,
               ),
             ),
             const SizedBox(height: 28),
@@ -108,27 +112,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // ── Section 1: PROTECTION ──
             _sectionLabel('PROTECTION'),
             const SizedBox(height: 10),
-            Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFF18181B),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF27272A), width: 1),
-              ),
+            ShadCard(
+              padding: EdgeInsets.zero,
               child: Column(
                 children: [
-                  _switchTile(
+                  ShadToggleTile(
                     title: 'Master Protection',
                     value: s.protectionEnabled,
                     onChanged: (v) => s.setProtection(v),
                   ),
-                  const Divider(color: Color(0xFF27272A), height: 1, thickness: 1),
-                  _switchTile(
+                  const Divider(color: ShadTokens.border, height: 1, thickness: 1),
+                  ShadToggleTile(
                     title: 'In-Call Banner',
                     value: s.overlayEnabled,
                     onChanged: (v) => s.setOverlay(v),
                   ),
-                  const Divider(color: Color(0xFF27272A), height: 1, thickness: 1),
-                  _switchTile(
+                  const Divider(color: ShadTokens.border, height: 1, thickness: 1),
+                  ShadToggleTile(
                     title: 'Haptic Alerts',
                     value: s.soundEnabled,
                     onChanged: (v) => s.setSound(v),
@@ -144,13 +144,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 10),
 
             // Sensitivity threshold slider
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF18181B),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF27272A), width: 1),
-              ),
+            ShadCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -161,22 +155,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         style: GoogleFonts.inter(
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
-                          color: Colors.white,
+                          color: ShadTokens.foreground,
                         ),
                       ),
                       const Spacer(),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF131315),
-                          borderRadius: BorderRadius.circular(999),
+                          color: ShadTokens.background,
+                          borderRadius: BorderRadius.circular(ShadTokens.radiusFull),
                         ),
                         child: Text(
                           s.sensitivity.toStringAsFixed(2),
                           style: GoogleFonts.inter(
                             fontSize: 12,
                             fontWeight: FontWeight.w800,
-                            color: const Color(0xFF10B981),
+                            color: ShadTokens.verified,
                           ),
                         ),
                       ),
@@ -188,14 +182,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     max: 0.90,
                     divisions: 8,
                     label: s.sensitivity.toStringAsFixed(2),
-                    activeColor: const Color(0xFF10B981),
+                    activeColor: ShadTokens.verified,
                     onChanged: (v) => s.setSensitivity(v),
                   ),
                   Text(
                     'Lower = more sensitive (more alerts). Maps to "configurable thresholds per scenario" in the SIH brief.',
                     style: GoogleFonts.inter(
                       fontSize: 11,
-                      color: const Color(0xFF8E9192),
+                      color: ShadTokens.muted,
                       height: 1.4,
                     ),
                   ),
@@ -206,13 +200,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // Voice calibration card
             Consumer<CalibrationProvider>(
-              builder: (context, calib, _) => Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF18181B),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFF27272A), width: 1),
-                ),
+              builder: (context, calib, _) => ShadCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -221,7 +209,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         Icon(
                           calib.isCalibrated ? LucideIcons.badgeCheck : LucideIcons.mic,
                           size: 18,
-                          color: calib.isCalibrated ? const Color(0xFF10B981) : const Color(0xFF8E9192),
+                          color: calib.isCalibrated ? ShadTokens.verified : ShadTokens.muted,
                         ),
                         const SizedBox(width: 8),
                         Expanded(
@@ -232,7 +220,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             style: GoogleFonts.inter(
                               fontSize: 14,
                               fontWeight: FontWeight.w700,
-                              color: Colors.white,
+                              color: ShadTokens.foreground,
                             ),
                           ),
                         ),
@@ -243,39 +231,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       'Records ~10 seconds of you speaking normally, on-device only, to tune the alert line to your natural speaking style. Nothing is uploaded.',
                       style: GoogleFonts.inter(
                         fontSize: 11,
-                        color: const Color(0xFF8E9192),
+                        color: ShadTokens.muted,
                         height: 1.4,
                       ),
                     ),
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        ElevatedButton.icon(
-                          onPressed: _calibrating ? null : _runCalibration,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: Colors.black,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                          ),
-                          icon: _calibrating
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                              : const Icon(LucideIcons.mic, size: 16),
-                          label: Text(
-                            _calibrating
-                                ? 'Listening...'
-                                : (calib.isCalibrated ? 'Recalibrate' : 'Calibrate My Voice'),
-                            style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700),
-                          ),
+                        ShadButton(
+                          onTap: _calibrating ? null : _runCalibration,
+                          loading: _calibrating,
+                          icon: _calibrating ? null : const Icon(LucideIcons.mic, size: 16),
+                          text: _calibrating
+                              ? 'Listening...'
+                              : (calib.isCalibrated ? 'Recalibrate' : 'Calibrate My Voice'),
                         ),
                         if (calib.isCalibrated) ...[
                           const SizedBox(width: 8),
-                          TextButton(
-                            onPressed: _calibrating ? null : () => calib.clearBaseline(),
-                            child: const Text('Reset',
-                                style: TextStyle(color: Color(0xFF8E9192))),
+                          ShadButton(
+                            variant: ShadButtonVariant.ghost,
+                            onTap: _calibrating ? null : () => calib.clearBaseline(),
+                            text: 'Reset',
                           ),
                         ],
                       ],
@@ -289,12 +265,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // ── Section 2: PERMISSIONS ──
             _sectionLabel('PERMISSIONS'),
             const SizedBox(height: 10),
-            Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFF18181B),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF27272A), width: 1),
-              ),
+            ShadCard(
+              padding: EdgeInsets.zero,
               child: Column(
                 children: [
                   _navigationTile(
@@ -305,7 +277,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _refresh();
                     },
                   ),
-                  const Divider(color: Color(0xFF27272A), height: 1, thickness: 1),
+                  const Divider(color: ShadTokens.border, height: 1, thickness: 1),
                   _navigationTile(
                     title: 'Display Over Other Apps',
                     status: _hasOverlay ? 'Allowed' : 'Grant',
@@ -314,7 +286,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _refresh();
                     },
                   ),
-                  const Divider(color: Color(0xFF27272A), height: 1, thickness: 1),
+                  const Divider(color: ShadTokens.border, height: 1, thickness: 1),
                   _navigationTile(
                     title: 'Default Phone App',
                     status: _isDefaultDialer ? 'Active' : 'Grant',
@@ -331,12 +303,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // ── Section 3: ABOUT & STATUTORY DPDP ACT ──
             _sectionLabel('COMPLIANCE & SYSTEM'),
             const SizedBox(height: 10),
-            Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFF18181B),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF27272A), width: 1),
-              ),
+            ShadCard(
+              padding: EdgeInsets.zero,
               child: Column(
                 children: [
                   _navigationTile(
@@ -344,7 +312,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     status: 'Verified',
                     onTap: () => _showDpdpComplianceModal(context),
                   ),
-                  const Divider(color: Color(0xFF27272A), height: 1, thickness: 1),
+                  const Divider(color: ShadTokens.border, height: 1, thickness: 1),
                   _navigationTile(
                     title: 'Neural Engine Architecture',
                     status: 'ONNX INT8',
@@ -361,7 +329,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 s.resetToDefaults();
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    backgroundColor: Color(0xFF18181B),
+                    backgroundColor: ShadTokens.surface,
                     content: Text(
                       'Settings restored to defense defaults',
                       style: TextStyle(color: Colors.white),
@@ -374,9 +342,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 width: double.infinity,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF18181B),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFF27272A), width: 1),
+                  color: ShadTokens.surface,
+                  borderRadius: BorderRadius.circular(ShadTokens.radiusLg),
+                  border: Border.all(color: ShadTokens.border, width: 1),
                 ),
                 child: Text(
                   'Reset to Defaults',
@@ -404,44 +372,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           fontSize: 12,
           fontWeight: FontWeight.w700,
           letterSpacing: 0.8,
-          color: const Color(0xFF71717A),
+          color: ShadTokens.mutedFg,
         ),
-      ),
-    );
-  }
-
-  Widget _switchTile({
-    required String title,
-    required bool value,
-    required ValueChanged<bool> onChanged,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: Text(
-              title,
-              style: GoogleFonts.inter(
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-                color: Colors.white,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Switch(
-            value: value,
-            onChanged: onChanged,
-            activeThumbColor: const Color(0xFF131315),
-            activeTrackColor: Colors.white,
-            inactiveThumbColor: const Color(0xFF71717A),
-            inactiveTrackColor: const Color(0xFF27272A),
-            trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
-          ),
-        ],
       ),
     );
   }
@@ -477,14 +409,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: GoogleFonts.inter(
                     fontSize: 14,
                     fontWeight: FontWeight.w400,
-                    color: const Color(0xFF8E9192),
+                    color: ShadTokens.muted,
                   ),
                 ),
                 const SizedBox(width: 6),
                 const Icon(
                   LucideIcons.chevronRight,
                   size: 16,
-                  color: Color(0xFF8E9192),
+                  color: ShadTokens.muted,
                 ),
               ],
             ),
@@ -497,7 +429,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _showDpdpComplianceModal(BuildContext context) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF18181B),
+      backgroundColor: ShadTokens.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -521,7 +453,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(LucideIcons.x, color: Color(0xFF8E9192), size: 20),
+                      icon: const Icon(LucideIcons.x, color: ShadTokens.muted, size: 20),
                       onPressed: () => Navigator.pop(ctx),
                     ),
                   ],
@@ -583,7 +515,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             desc,
             style: GoogleFonts.inter(
               fontSize: 11,
-              color: const Color(0xFF8E9192),
+              color: ShadTokens.muted,
               height: 1.35,
             ),
           ),
@@ -595,7 +527,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _showArchitectureModal(BuildContext context) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF18181B),
+      backgroundColor: ShadTokens.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -619,7 +551,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(LucideIcons.x, color: Color(0xFF8E9192), size: 20),
+                      icon: const Icon(LucideIcons.x, color: ShadTokens.muted, size: 20),
                       onPressed: () => Navigator.pop(ctx),
                     ),
                   ],
@@ -661,7 +593,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(key, style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF8E9192))),
+          Text(key, style: GoogleFonts.inter(fontSize: 12, color: ShadTokens.muted)),
           Text(val, style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white)),
         ],
       ),

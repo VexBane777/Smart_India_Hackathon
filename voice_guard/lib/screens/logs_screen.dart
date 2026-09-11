@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../providers/risk_score_provider.dart';
 import '../models/call_log.dart';
+import '../design/tokens.dart';
 
 class _AuditItemData {
   final String title;
@@ -28,17 +29,6 @@ class LogsScreen extends StatefulWidget {
 
 class _LogsScreenState extends State<LogsScreen> {
   int _filterIndex = 0; // 0: All, 1: Threats, 2: Suspicious, 3: Verified
-
-  // Default baseline data matching Figma Main-2.png
-  final List<_AuditItemData> _baselineLogs = const [
-    _AuditItemData(title: '+91 98450 12891', date: '11 Sep, 11:23 AM', riskPercent: 94),
-    _AuditItemData(title: 'WhatsApp Audio (VoIP)', date: '10 Sep, 10:35 AM', riskPercent: 72),
-    _AuditItemData(title: '+91 91234 56780', date: '10 Sep, 05:35 AM', riskPercent: 42),
-    _AuditItemData(title: '+91 80234 56789', date: '11 Sep, 07:55 AM', riskPercent: 8),
-    _AuditItemData(title: '9758062414', date: '11 Sep, 01:37 PM', riskPercent: 0),
-    _AuditItemData(title: '+1 415 555 0192', date: '09 Sep, 04:12 PM', riskPercent: 2),
-    _AuditItemData(title: '+44 20 7946 0912', date: '08 Sep, 09:40 PM', riskPercent: 1),
-  ];
 
   @override
   Widget build(BuildContext context) {
@@ -65,8 +55,6 @@ class _LogsScreenState extends State<LogsScreen> {
       ));
     }
 
-    allItems.addAll(_baselineLogs);
-
     final totalCount = allItems.length;
     final threatCount = allItems.where((i) => i.riskPercent >= 70).length;
     final suspiciousCount = allItems.where((i) => i.riskPercent >= 30 && i.riskPercent < 70).length;
@@ -80,7 +68,7 @@ class _LogsScreenState extends State<LogsScreen> {
     }).toList();
 
     return Scaffold(
-      backgroundColor: const Color(0xFF131315),
+      backgroundColor: ShadTokens.background,
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -109,7 +97,7 @@ class _LogsScreenState extends State<LogsScreen> {
                         style: GoogleFonts.inter(
                           fontSize: 12,
                           fontWeight: FontWeight.w400,
-                          color: const Color(0xFF8E9192),
+                          color: ShadTokens.muted,
                         ),
                       ),
                     ],
@@ -120,7 +108,7 @@ class _LogsScreenState extends State<LogsScreen> {
                   onTap: () {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        backgroundColor: const Color(0xFF18181B),
+                        backgroundColor: ShadTokens.surface,
                         content: Text(
                           'Exported $totalCount audit logs to device storage',
                           style: const TextStyle(color: Colors.white),
@@ -132,9 +120,9 @@ class _LogsScreenState extends State<LogsScreen> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1C1C1E),
+                      color: ShadTokens.surfaceContainer,
                       borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: const Color(0xFF27272A)),
+                      border: Border.all(color: ShadTokens.border),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -163,7 +151,7 @@ class _LogsScreenState extends State<LogsScreen> {
                 Expanded(
                   child: _metricCard(
                     title: 'INSPECTED',
-                    value: '148',
+                    value: totalCount.toString(),
                     subtitle: 'Deep-scans',
                   ),
                 ),
@@ -179,7 +167,9 @@ class _LogsScreenState extends State<LogsScreen> {
                 Expanded(
                   child: _metricCard(
                     title: 'PURITY',
-                    value: '93.2%',
+                    value: totalCount == 0
+                        ? '—'
+                        : '${(verifiedCount / totalCount * 100).toStringAsFixed(1)}%',
                     subtitle: 'Biometric',
                   ),
                 ),
@@ -211,14 +201,14 @@ class _LogsScreenState extends State<LogsScreen> {
                 child: Center(
                   child: Text(
                     'No audit records found',
-                    style: GoogleFonts.inter(color: const Color(0xFF71717A)),
+                    style: GoogleFonts.inter(color: ShadTokens.mutedFg),
                   ),
                 ),
               )
             else
               for (int i = 0; i < filteredItems.length; i++) ...[
                 _auditRecordRow(context, filteredItems[i]),
-                const Divider(color: Color(0xFF27272A), height: 1, thickness: 1),
+                const Divider(color: ShadTokens.border, height: 1, thickness: 1),
               ],
             const SizedBox(height: 24),
           ],
@@ -235,9 +225,9 @@ class _LogsScreenState extends State<LogsScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF18181B),
+        color: ShadTokens.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF27272A), width: 1),
+        border: Border.all(color: ShadTokens.border, width: 1),
       ),
       child: Column(
         children: [
@@ -247,7 +237,7 @@ class _LogsScreenState extends State<LogsScreen> {
               fontSize: 10.5,
               fontWeight: FontWeight.w700,
               letterSpacing: 0.8,
-              color: const Color(0xFF8E9192),
+              color: ShadTokens.muted,
             ),
           ),
           const SizedBox(height: 8),
@@ -266,7 +256,7 @@ class _LogsScreenState extends State<LogsScreen> {
             style: GoogleFonts.inter(
               fontSize: 11,
               fontWeight: FontWeight.w400,
-              color: const Color(0xFF71717A),
+              color: ShadTokens.mutedFg,
             ),
           ),
         ],
@@ -282,10 +272,10 @@ class _LogsScreenState extends State<LogsScreen> {
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
         decoration: BoxDecoration(
-          color: isSelected ? Colors.white : const Color(0xFF18181B),
+          color: isSelected ? Colors.white : ShadTokens.surface,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: isSelected ? Colors.white : const Color(0xFF27272A),
+            color: isSelected ? Colors.white : ShadTokens.border,
             width: 1,
           ),
         ),
@@ -330,7 +320,7 @@ class _LogsScreenState extends State<LogsScreen> {
                     style: GoogleFonts.inter(
                       fontSize: 12,
                       fontWeight: FontWeight.w400,
-                      color: const Color(0xFF71717A),
+                      color: ShadTokens.mutedFg,
                     ),
                   ),
                 ],
@@ -357,7 +347,7 @@ class _LogsScreenState extends State<LogsScreen> {
   void _showAuditDetails(BuildContext context, _AuditItemData item) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF18181B),
+      backgroundColor: ShadTokens.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -381,7 +371,7 @@ class _LogsScreenState extends State<LogsScreen> {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(LucideIcons.x, color: Color(0xFF8E9192), size: 20),
+                      icon: const Icon(LucideIcons.x, color: ShadTokens.muted, size: 20),
                       onPressed: () => Navigator.pop(ctx),
                     ),
                   ],
@@ -431,7 +421,7 @@ class _LogsScreenState extends State<LogsScreen> {
         children: [
           Text(
             label,
-            style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF8E9192)),
+            style: GoogleFonts.inter(fontSize: 12, color: ShadTokens.muted),
           ),
           Text(
             value,

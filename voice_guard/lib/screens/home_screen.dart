@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../providers/call_state_provider.dart';
 import '../providers/risk_score_provider.dart';
+import '../models/risk_score.dart';
 import '../widgets/shad_half_donut_chart.dart';
 import '../widgets/shad_badge.dart';
 import 'call_screen.dart';
@@ -17,7 +18,12 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final callState = context.watch<CallStateProvider>().state;
-    final risk = context.watch<RiskScoreProvider>().current;
+    final riskProvider = context.watch<RiskScoreProvider>();
+    final risk = riskProvider.current;
+    final callLogs = riskProvider.callLogs;
+    final scannedCount = callLogs.length;
+    final humanCount = callLogs.where((c) => c.verdict == Verdict.verified).length;
+    final aiCount = callLogs.where((c) => c.verdict != Verdict.verified).length;
 
     return Scaffold(
       backgroundColor: const Color(0xFF131315),
@@ -127,9 +133,9 @@ class HomeScreen extends StatelessWidget {
 
           // ── Minimalist Half-Donut Chart: 148 CELLS SCANNED ──
           ShadHalfDonutChart(
-            totalCount: 148,
-            humanCount: 138,
-            aiCount: 10,
+            totalCount: scannedCount,
+            humanCount: humanCount,
+            aiCount: aiCount,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const LogsScreen()),
