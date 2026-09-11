@@ -225,6 +225,58 @@ declared in `pubspec.yaml`). `.onnx` is gitignored project-wide *except*
 this one shipped asset (see root `.gitignore`'s explicit exception) — every
 other `.onnx` (training runs, intermediates) stays ignored as before.
 
+## Acoustic playback loop (speaker -> phone mic) — v12_seqcnn plan + deploy gate
+
+**2026-09-11 finding, measured on the *deployed* v11_seqcnn ONNX with
+`eval_playback_loop.py`:** the model scores the bundled fake assets
+correctly when they are scored *directly* (clean), but collapses when the
+same audio is played through a loudspeaker and captured by a phone
+microphone — on `test_assets/ai_clone_test_clip.wav` and
+`tts_chattts_sample.wav` the simulated speaker->mic loop drops the
+AI-probability to ~0.30 and below (real rooms/AGC push it lower, ~0.01-0.30,
+which is exactly the "needle barely moves" the user saw live). This is a
+channel-domain gap, not a capture bug: the Dart/Python feature extractors
+are parity-tested, the gauge is `EMA(AI-prob)*100` with no inversion, and a
+-24 dB level change alone barely moves the score (0.986 -> 0.924). Room
+reverb + speaker/phone-mic coloration + ambient noise flatten the prosody/
+LFCC cues the model keys on (see `docs/CRITICAL-entity-vs-style-confound.md`).
+
+The fix is model-side, and it is wired but NOT yet trained (the training
+corpus was deleted after v3 — reconstruct it with the "Getting real training
+data" commands above):
+
+1. **`vaani/telechannel/configs/channels.yaml` gained a `playback` recipe**
+   (2026-09-11) modeling the acoustic loop: far room (RT60 600 ms, wet 0.6),
+   pink noise at 12 dB, mic clip 0.3, no digital codec/packet loss, and a
+   200-3800 Hz speaker+mic passband (uses the bandlimit stage's new
+   `low_hz`/`high_hz` overrides — defaults remain 300-3400).
+2. **Retrain** — same command as `voice_guard_v11_seqcnn` but with
+   `playback` added to the channel mix:
+   ```bash
+   python train_seq_cnn.py \
+       --real data/real data/real2021 data/real_itw_train \
+       --fake data/fake data/fake2021 data/fake_itw_train \
+       --real-clean data/real_noise_aug_split/train/en_native data/real_noise_aug_split/train/hi_native \
+       --channel whatsapp volte playback \
+       --weight-decay 1e-4 --label-smoothing 0.05 --attack-type-loss-weight 1.0 \
+       --save-every-epoch-checkpoints \
+       --out runs/voice_guard_v12_playback --epochs 25
+   ```
+3. **Deploy gate** — a model that still collapses on the speaker->mic loop
+   must not be shipped. Run BOTH, and only copy `model.onnx` into
+   `assets/models/voice_detector.onnx` when both pass:
+   ```bash
+   python eval_held_out_dirs_seqcnn.py --model runs/voice_guard_v12_playback/model.pt \
+       --norm-stats runs/voice_guard_v12_playback/norm_stats.npz \
+       --real data/real_itw_held --fake data/fake_itw_held --baseline-eer 0.1538
+   python eval_playback_loop.py --onnx runs/voice_guard_v12_playback/model.onnx \
+       --assets test_assets --gate-clean-min 0.60 --gate-loop-min 0.50
+   ```
+   `eval_playback_loop.py` scores each test asset clean vs. through
+   `simulate_speaker_to_mic_loop()` (the same seeded approximation used for
+   the diagnosis) and exits nonzero on either gate — the current deployed
+   model fails the loop gate today, which is the point of the gate.
+
 ## Known gaps (deliberate, not oversights)
 
 - No CNN/temporal model — the feature vector is already mean-pooled (no

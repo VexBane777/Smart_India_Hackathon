@@ -32,6 +32,7 @@ class _CallScreenState extends State<CallScreen> {
   bool _micMuted = false;
   bool _liveMicActive = false;
   bool _detectionActive = false;
+  bool _fileScanActive = false;
   bool _isDefaultDialer = false;
   DateTime? _callStartTime;
   List<double> _liveWaveform = const [];
@@ -207,6 +208,61 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  /// Tests the ONNX scoring path on a user-picked .wav file, bypassing the
+  /// acoustic speaker->mic loop entirely. This is the deterministic demo path
+  /// (Module E spec's audio_decode_bridge): the same model, the same feature
+  /// extraction, the same gauge — just the file's own PCM, no room acoustics.
+  Future<void> _startFileScan() async {
+    final calls = context.read<CallService>();
+    final audio = context.read<AudioService>();
+    final callState = context.read<CallStateProvider>();
+    final risk = context.read<RiskScoreProvider>();
+
+    final bytes = await calls.pickAudioForTest();
+    if (!mounted) return;
+    if (bytes == null || bytes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No WAV file selected.')),
+      );
+      return;
+    }
+
+    // Tear down any live capture/scoring so the file scan is the only
+    // source feeding the gauge.
+    audio.stopScoring();
+    audio.stopAudioFileScoring();
+    await calls.stopCallDetection();
+    _stopCaptureStatusPolling();
+
+    _callStartTime = DateTime.now();
+    setState(() {
+      _liveMicActive = false;
+      _detectionActive = false;
+      _fileScanActive = true;
+    });
+    callState.setStatus(CallStatus.active, number: 'Audio file scan');
+    risk.reset();
+    audio.clearBuffer();
+
+    final err = await audio.scanAudioFile(bytes);
+    if (!mounted) return;
+    setState(() => _fileScanActive = false);
+    if (err == 'cancelled') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Scan cancelled.')),
+      );
+    } else if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not scan file: $err')),
+      );
+      callState.setStatus(CallStatus.disconnected);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('File scan complete.')),
+      );
+    }
+  }
+
   Future<void> _toggleDetection() async {
     final calls = context.read<CallService>();
     final audio = context.read<AudioService>();
@@ -244,8 +300,10 @@ class _CallScreenState extends State<CallScreen> {
       _speakerphoneOn = false;
       _micMuted = false;
       _detectionActive = false;
+      _fileScanActive = false;
     });
     audio.stopScoring();
+    audio.stopAudioFileScoring();
     await calls.endCall();
     await calls.stopCallDetection();
     await calls.hideOverlay();
@@ -299,6 +357,11 @@ class _CallScreenState extends State<CallScreen> {
     // 1) Live Mic self-test session — tear it down entirely; _endCall also
     //    writes the call log and restores the dialpad view.
     if (_liveMicActive) {
+      await _endCall();
+      return;
+    }
+    // 2) Audio-file scan session — same teardown as live mic.
+    if (_fileScanActive) {
       await _endCall();
       return;
     }
@@ -450,7 +513,7 @@ class _CallScreenState extends State<CallScreen> {
         const SizedBox(height: 16),
 
         // ── Carrier Detection Opt-in (if normal call) ──
-        if (!_liveMicActive && call.state.isActive) ...[
+        if (!_liveMicActive && !_fileScanActive && call.state.isActive) ...[
           ShadGlassCard(
             padding: const EdgeInsets.all(ShadTokens.space3),
             tintColor: _detectionActive ? const Color(0xFFF0FDF4) : Colors.white,
@@ -769,7 +832,7 @@ class _CallScreenState extends State<CallScreen> {
           ),
         ),
 
-        // ── Action Bar: Live Mic, Call, Backspace ──
+        // ── Action Bar: Live Mic, File Scan, Call, Backspace ──
         Padding(
           padding: const EdgeInsets.only(bottom: 28, left: 36, right: 36),
           child: Row(
@@ -787,6 +850,22 @@ class _CallScreenState extends State<CallScreen> {
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(LucideIcons.mic, size: 22, color: Colors.white),
+                ),
+              ),
+
+              // "Test with audio file" — scores a picked .wav through the
+              // same ONNX path with NO acoustic loop (deterministic demo).
+              InkWell(
+                onTap: _startFileScan,
+                borderRadius: BorderRadius.circular(32),
+                child: Container(
+                  width: 62,
+                  height: 62,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF1C1C1E),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(LucideIcons.fileAudio2, size: 22, color: Color(0xFF9AA8BB)),
                 ),
               ),
 

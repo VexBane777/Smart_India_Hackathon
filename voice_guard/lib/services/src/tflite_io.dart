@@ -93,9 +93,11 @@ class TFLiteService {
     return raw;
   }
 
-  Future<(double, String?, double)> scoreChunk(List<double> pcm) {
-    final lfccSequence = AudioProcessor.extractLfccSequence(pcm);
-    final scalars = AudioProcessor.extractScalars(pcm);
+  Future<(double, String?, double)> scoreChunk(List<double> pcm) async {
+    // Feature extraction is CPU-heavy pure Dart (see AudioProcessor.
+    // extractFeaturesIsolate's docstring) — run it off the UI isolate so a
+    // 1-2.5s stall doesn't freeze the app every scoring tick.
+    final (lfccSequence, scalars) = await compute(AudioProcessor.extractFeaturesIsolate, pcm);
     return infer(lfccSequence, scalars);
   }
 

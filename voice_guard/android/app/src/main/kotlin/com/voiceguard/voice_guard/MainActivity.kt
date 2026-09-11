@@ -7,6 +7,7 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -22,6 +23,12 @@ class MainActivity : FlutterActivity() {
     private var pendingProjectionResult: MethodChannel.Result? = null
     private var pendingMediaProjection: android.media.projection.MediaProjection? = null
     private val PLAYBACK_CAPTURE_REQUEST_CODE = 2001
+    private val PICK_AUDIO_REQUEST_CODE = 2002
+    private var pendingAudioPickResult: MethodChannel.Result? = null
+    // A 16-bit PCM mono WAV at 16kHz is 32 KB/s; 25 MB covers ~13 min. SAF
+    // multi-GB voice notes are rejected with a friendly null instead of an
+    // OOM.
+    private val PICK_AUDIO_MAX_BYTES = 25 * 1024 * 1024
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -74,6 +81,27 @@ class MainActivity : FlutterActivity() {
                 }
                 "getLastRecordingPath" -> {
                     result.success(AudioCaptureManager.lastRecordingPath)
+                }
+                "pickAudioForTest" -> {
+                    if (pendingAudioPickResult != null) {
+                        result.success(null)
+                    } else {
+                        pendingAudioPickResult = result
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "audio/*"
+                            putExtra(
+                                Intent.EXTRA_MIME_TYPES,
+                                arrayOf("audio/wav", "audio/x-wav", "audio/*", "application/octet-stream")
+                            )
+                        }
+                        try {
+                            startActivityForResult(intent, PICK_AUDIO_REQUEST_CODE)
+                        } catch (e: Exception) {
+                            pendingAudioPickResult = null
+                            result.success(null)
+                        }
+                    }
                 }
                 "getCaptureStatus" -> {
                     result.success(mapOf(
@@ -226,6 +254,32 @@ class MainActivity : FlutterActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == PICK_AUDIO_REQUEST_CODE) {
+            val res = pendingAudioPickResult
+            pendingAudioPickResult = null
+            var bytes: ByteArray? = null
+            if (resultCode == Activity.RESULT_OK && data?.data != null) {
+                try {
+                    contentResolver.openInputStream(data.data!!)?.use { stream ->
+                        val buf = ByteArray(1 shl 16)
+                        val baos = java.io.ByteArrayOutputStream()
+                        var total = 0
+                        while (true) {
+                            val n = stream.read(buf)
+                            if (n <= 0) break
+                            total += n
+                            if (total > PICK_AUDIO_MAX_BYTES) { baos.reset(); break }
+                            baos.write(buf, 0, n)
+                        }
+                        if (baos.size() > 0) bytes = baos.toByteArray()
+                    }
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "pickAudioForTest read failed", e)
+                }
+            }
+            res?.success(bytes)
+            return
+        }
         if (requestCode != PLAYBACK_CAPTURE_REQUEST_CODE) return
         val granted = resultCode == Activity.RESULT_OK && data != null
         if (granted) {

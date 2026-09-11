@@ -31,6 +31,8 @@ class AudioService {
 
   final List<double> _buffer = [];
   Timer? _timer;
+  bool _scoring = false;
+  bool _fileScanning = false;
   final _scoreCtrl = StreamController<double>.broadcast();
   final _pcmCtrl = StreamController<List<double>>.broadcast();
   final _rmsCtrl = StreamController<double>.broadcast();
@@ -94,12 +96,18 @@ class AudioService {
       // high-confidence verdicts in testing (an "AI DETECTED" alert fired a
       // second into a call before any real speech had arrived).
       if (_buffer.length < 48000) return;
+      // A previous tick's scoreChunk() (feature extraction + inference) is
+      // still in flight — skip this tick instead of piling up concurrent
+      // isolate spawns / ONNX runs on top of it.
+      if (_scoring) return;
       final chunk = _buffer.sublist(_buffer.length - 48000);
 
       double sumSq = 0;
       for (final s in chunk) { sumSq += s * s; }
       final chunkRms = math.sqrt(sumSq / chunk.length);
+      final (peakDb, noiseFloorDb) = _levelDb(chunk);
       debugPrint('Monitor: chunkRms=${chunkRms.toStringAsFixed(6)} (int16-equiv=${(chunkRms * 32768).toStringAsFixed(1)}) '
+          'peak=${peakDb.toStringAsFixed(1)}dBFS noise=${noiseFloorDb.toStringAsFixed(1)}dBFS '
           'threshold=${_silenceRmsThreshold.toStringAsFixed(6)} bufLen=${_buffer.length}');
       if (chunkRms < _silenceRmsThreshold) {
         // Silent/zero-filled window: skip scoring rather than feed the model
@@ -110,9 +118,14 @@ class AudioService {
       }
       _signalCtrl.add(true);
 
-      final (score, attackType, attackConfidence) = await tflite.scoreChunk(chunk);
-      _scoreCtrl.add(score);
-      _attackTypeCtrl.add((attackType, attackConfidence));
+      _scoring = true;
+      try {
+        final (score, attackType, attackConfidence) = await tflite.scoreChunk(chunk);
+        _scoreCtrl.add(score);
+        _attackTypeCtrl.add((attackType, attackConfidence));
+      } finally {
+        _scoring = false;
+      }
     });
   }
 
@@ -122,6 +135,104 @@ class AudioService {
   }
 
   void clearBuffer() => _buffer.clear();
+
+  /// Cancels an in-flight [scanAudioFile] loop (checked between windows).
+  void stopAudioFileScoring() => _fileScanning = false;
+
+  /// (peakDbFS, noiseFloorDbFS) for a scoring window — cheap strided scan
+  /// (every 8th sample; 10th percentile as a noise-floor proxy). Pure
+  /// instrumentation for the Monitor/AudioScan logs; never used in the
+  /// scoring decision itself.
+  (double, double) _levelDb(List<double> chunk) {
+    double peak = 0;
+    final mags = <double>[];
+    for (int i = 0; i < chunk.length; i += 8) {
+      final a = chunk[i] < 0 ? -chunk[i] : chunk[i];
+      if (a > peak) peak = a;
+      mags.add(a);
+    }
+    mags.sort();
+    final noiseFloor = mags[(mags.length * 0.10).floor().clamp(0, mags.length - 1)];
+    return (
+      20 * math.log(peak + 1e-9) / math.ln10,
+      20 * math.log(noiseFloor + 1e-9) / math.ln10,
+    );
+  }
+
+  /// Scores a 16-bit PCM WAV file through the EXACT same path live audio
+  /// takes — `AudioProcessor.extractFeaturesIsolate` -> the same ONNX
+  /// [TFLiteService.scoreChunk], 3s windows, the same RMS silence gate —
+  /// sliding the window at 0.5 s so a played clip actually moves the needle
+  /// during its duration instead of one score per tick.
+  ///
+  /// The only difference from a real call is the source: the file is decoded
+  /// in RAM and never replayed through a speaker, i.e. there is no acoustic
+  /// loop for the model to choke on. This is the deterministic demo path
+  /// (Module E spec's audio_decode_bridge) — for scoring a user-selected
+  /// .wav byte-for-byte like the laptop does.
+  ///
+  /// Returns null on success, a human-readable error string on failure, or
+  /// 'cancelled'. Call [stopAudioFileScoring] from another isolate to cancel.
+  Future<String?> scanAudioFile(Uint8List wavBytes) async {
+    if (_fileScanning) return 'scan already running';
+    final decoded = AudioProcessor.decodePcm16Wav(wavBytes);
+    if (decoded == null) return 'only 16-bit PCM .wav files are supported';
+    var pcm = decoded.samples;
+    if (decoded.sampleRate != AudioProcessor.sampleRate) {
+      pcm = AudioProcessor.resampleLinear(pcm, decoded.sampleRate, AudioProcessor.sampleRate);
+    }
+    if (pcm.isEmpty) return 'empty audio';
+
+    _fileScanning = true;
+    const win = AudioProcessor.chunkSamples; // 48000 == 3s @ 16k
+    const hop = 8000; // 0.5s sliding hop
+    if (pcm.length < win) {
+      pcm = [...List<double>.filled(win - pcm.length, 0.0), ...pcm];
+    }
+    final lastStart = pcm.length - win;
+    debugPrint('AudioScan: ${pcm.length} samples (~${(pcm.length / AudioProcessor.sampleRate).toStringAsFixed(1)}s), '
+        '${(lastStart ~/ hop) + 1} scoring windows');
+    int i = 0;
+    while (i <= lastStart && _fileScanning) {
+      final chunk = pcm.sublist(i, i + win);
+      final windowT = i / AudioProcessor.sampleRate;
+
+      double sumSq = 0;
+      for (final s in chunk) { sumSq += s * s; }
+      final rms = math.sqrt(sumSq / chunk.length);
+      _rmsCtrl.add(rms);
+      final (peakDb, noiseFloorDb) = _levelDb(chunk);
+      debugPrint('AudioScan: t=${windowT.toStringAsFixed(1)}s '
+          'rms=${rms.toStringAsFixed(4)} peak=${peakDb.toStringAsFixed(1)}dBFS noise=${noiseFloorDb.toStringAsFixed(1)}dBFS');
+
+      if (rms >= _silenceRmsThreshold) {
+        _signalCtrl.add(true);
+        try {
+          final (score, attackType, attackConfidence) = await tflite.scoreChunk(chunk);
+          _scoreCtrl.add(score);
+          _attackTypeCtrl.add((attackType, attackConfidence));
+        } catch (e) {
+          debugPrint('AudioScan: scoreChunk failed: $e');
+        }
+      } else {
+        _signalCtrl.add(false);
+        debugPrint('AudioScan: t=${windowT.toStringAsFixed(1)}s silent — skipped scoring');
+      }
+
+      final step = math.max(1, chunk.length ~/ 28);
+      final wave = <double>[];
+      for (int j = 0; j < chunk.length && wave.length < 28; j += step) {
+        wave.add(chunk[j]);
+      }
+      _pcmCtrl.add(wave);
+
+      await Future.delayed(const Duration(milliseconds: 40));
+      i += hop;
+    }
+    _fileScanning = false;
+    debugPrint('AudioScan: finished at t=${(i / AudioProcessor.sampleRate).toStringAsFixed(1)}s');
+    return i > lastStart ? null : 'cancelled';
+  }
 
   /// Collects `windows` consecutive raw scores from scoreStream, without
   /// touching RiskScoreProvider (deliberately — see plan Global

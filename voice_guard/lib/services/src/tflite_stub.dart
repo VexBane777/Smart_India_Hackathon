@@ -33,9 +33,8 @@ class TFLiteService {
     return raw;
   }
 
-  Future<(double, String?, double)> scoreChunk(List<double> pcm) {
-    final lfccSequence = AudioProcessor.extractLfccSequence(pcm);
-    final scalars = AudioProcessor.extractScalars(pcm);
+  Future<(double, String?, double)> scoreChunk(List<double> pcm) async {
+    final (lfccSequence, scalars) = await compute(AudioProcessor.extractFeaturesIsolate, pcm);
     return infer(lfccSequence, scalars);
   }
 

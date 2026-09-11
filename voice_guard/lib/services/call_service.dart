@@ -129,6 +129,19 @@ class CallService {
     }
   }
 
+  /// Launches the native Android Storage Access Framework picker and returns
+  /// the raw bytes of the selected .wav (null if cancelled, unreadable, or
+  /// over 25 MB — see MainActivity's PICK_AUDIO_MAX_BYTES). Used by the
+  /// "Test with audio file" scan path.
+  Future<Uint8List?> pickAudioForTest() async {
+    try {
+      return await _method.invokeMethod<Uint8List>('pickAudioForTest');
+    } catch (e) {
+      debugPrint('pickAudioForTest failed: $e');
+      return null;
+    }
+  }
+
   Future<bool> hasOverlayPermission() async {
     try {
       final v = await _method.invokeMethod<bool>('hasOverlayPermission');

@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 /// Lightweight LFCC + prosody feature extraction (Dart side).
 /// Mirrors the logic described in the SIH master prompt:
@@ -276,4 +277,120 @@ class AudioProcessor {
     }
     return out;
   }
+
+  /// Decodes a 16-bit PCM .wav (mono or stereo, arbitrary sample rate) into
+  /// float samples in [-1, 1] plus the file's sample rate. Returns null for
+  /// non-WAV / non-16-bit-PCM input instead of throwing, so the file-import
+  /// scan path can show a friendly error. Handles the canonical 'fmt ' chunk
+  /// (audioFormat == 1) and the WAVE_FORMAT_EXTENSIBLE variant (0xFFFE)
+  /// whose subformat GUID is PCM.
+  static ({List<double> samples, int sampleRate})? decodePcm16Wav(Uint8List bytes) {
+    if (bytes.length < 44) return null;
+    // 'RIFF' / 'WAVE'
+    if (bytes[0] != 0x52 || bytes[1] != 0x49 || bytes[2] != 0x46 || bytes[3] != 0x46) return null;
+    if (bytes[8] != 0x57 || bytes[9] != 0x41 || bytes[10] != 0x56 || bytes[11] != 0x45) return null;
+
+    int? channels;
+    int? sampleRate;
+    int? bitsPerSample;
+    int? dataOffset;
+    int? dataLen;
+
+    int pos = 12;
+    while (pos + 8 <= bytes.length) {
+      final id = _ascii(bytes, pos, 4);
+      final size = _le32(bytes, pos + 4);
+      if (id == 'fmt ') {
+        if (size < 16) return null;
+        int fmt = _le16(bytes, pos + 8);
+        if (fmt == 0xFFFE) {
+          // WAVE_FORMAT_EXTENSIBLE: the real format code is the first two
+          // bytes of the subformat GUID at payload offset 24.
+          if (pos + 8 + 24 + 2 > bytes.length) return null;
+          fmt = _le16(bytes, pos + 8 + 24);
+        }
+        if (fmt != 1) return null; // uncompressed 16-bit PCM only
+        channels = _le16(bytes, pos + 10);
+        sampleRate = _le32(bytes, pos + 12);
+        bitsPerSample = _le16(bytes, pos + 22);
+        if (channels <= 0 || sampleRate <= 0 || bitsPerSample != 16) {
+          return null;
+        }
+      } else if (id == 'data') {
+        dataOffset = pos + 8;
+        dataLen = size;
+        break;
+      }
+      pos += 8 + size + (size & 1); // chunks are word-aligned
+    }
+    if (channels == null || sampleRate == null || dataOffset == null || dataLen == null) return null;
+
+    final count = dataLen ~/ 2; // int16 samples, interleaved across channels
+    final out = <double>[];
+    if (channels == 1) {
+      for (int i = 0; i < count; i++) {
+        final o = dataOffset + i * 2;
+        if (o + 1 >= bytes.length) break;
+        out.add(_asInt16(bytes, o) / 32768.0);
+      }
+    } else {
+      for (int i = 0; i + channels <= count; i += channels) {
+        int acc = 0;
+        for (int c = 0; c < channels; c++) {
+          acc += _asInt16(bytes, dataOffset + (i + c) * 2);
+        }
+        out.add(acc / (channels * 32768.0));
+      }
+    }
+    return (samples: out, sampleRate: sampleRate);
+  }
+
+  /// Linear-interpolation resample to `toRate`, mirroring
+  /// vaani/app/server.py's `_load_mono_float` (np.interp), so arbitrary
+  /// sample-rate WAVs (e.g. 44.1/48k phone recordings) land on the model's
+  /// native 16 kHz.
+  static List<double> resampleLinear(List<double> x, int fromRate, int toRate) {
+    if (fromRate == toRate) return x;
+    final n = x.length;
+    if (n < 2) return x;
+    final nOut = (n * toRate / fromRate).round();
+    if (nOut <= 1) return [x[0]];
+    final out = <double>[];
+    final last = n - 1;
+    for (int i = 0; i < nOut; i++) {
+      final t = last * i / (nOut - 1);
+      final i0 = t.floor();
+      final frac = t - i0;
+      final i1 = i0 < last ? i0 + 1 : last;
+      out.add(x[i0] + (x[i1] - x[i0]) * frac);
+    }
+    return out;
+  }
+
+  /// Bundles both extraction passes into one `compute()`-friendly entry
+  /// point. Must be a static method (not a closure) so it can be shipped to
+  /// a background isolate — extractPhysio's pitch-tracking autocorrelation
+  /// is O(frames * lagRange * frameLen) (tens of millions of ops per 3s
+  /// chunk) and was blocking the UI isolate for 1-2.5s every scoring tick
+  /// (seen as "Skipped N frames" / multi-second MotionEvent processing in
+  /// logcat), freezing the app during calibration/Live Mic Test/calls.
+  static (List<List<double>>, List<double>) extractFeaturesIsolate(List<double> pcm) {
+    return (extractLfccSequence(pcm), extractScalars(pcm));
+  }
+
+  // ---- little-endian byte helpers (WAV decoding) ----
+
+  static int _le16(Uint8List b, int o) => b[o] | (b[o + 1] << 8);
+
+  static int _le32(Uint8List b, int o) =>
+      b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24);
+
+  static int _asInt16(Uint8List b, int o) {
+    var v = _le16(b, o);
+    if (v >= 32768) v -= 65536;
+    return v;
+  }
+
+  static String _ascii(Uint8List b, int o, int n) =>
+      String.fromCharCodes(b.sublist(o, o + n));
 }

@@ -17,6 +17,49 @@ not fix it. Three remediation tracks (cheap/partial to
 expensive/likely-effective) are laid out in that file, none yet started.
 Read it in full before deciding what to do next.
 
+## Session 2026-09-11 (PM) — playback→mic capture collapse root-caused; app gains a deterministic file-scan path
+
+**The symptom:** playing a .wav (which scores ~0.95–0.99 AI clean) through a
+computer speaker into the phone's Live Mic Test scored ~1–2%. Capture worked,
+model loaded. **Root-caused as a model channel-domain gap, not a capture bug.**
+
+Verified by measurement (all on the deployed `voice_detector.onnx`):
+- Clean direct scoring is correct (ai_clone 0.986; voice_conversion 0.957).
+- A simulated laptop-speaker→phone-mic loop collapses the same files to
+  ~0.15–0.51 depending on the file (real rooms/AGC push lower — your 1–2%).
+- Pure level attenuation (−24 dB) is NOT the cause (0.986 → 0.924).
+- No display inversion (gauge = EMA(AI-prob)·100), no Dart/Python feature
+  drift, no byte-order/sample-rate bug in the capture chain.
+- **Capture-side DSP fixes were tried and REJECTED by measurement:** noise-floor
+  spectral gating and level normalization both made scores worse (gated loop
+  → ~0.001; damaged clean too). The model's decision surface on this channel is
+  simply too fragile to patch from outside.
+- Mechanism: room reverb + speaker/phone-mic coloration + ambient noise flatten
+  the prosody/LFCC cues the model keys on — the documented entity-vs-style
+  confound again (`docs/CRITICAL-entity-vs-style-confound.md`).
+
+**What shipped this session:**
+- `vaani/telechannel/configs/channels.yaml`: new `playback` recipe (far-room
+  reverb, pink noise 12 dB, mic clip, 200–3800 Hz speaker+mic passband) for the
+  v12_seqcnn retrain; `bandlimit.py` gained `low_hz`/`high_hz` overrides
+  (defaults unchanged); pipeline forwards them.
+- `voice_guard/model_training/eval_playback_loop.py`: clean-vs-loop deploy gate
+  that the current model FAILS today (tts_chattts loop 0.283) — run it before
+  ever copying a retrained ONNX into `assets/models/`.
+- `model_training/README.md`: v12 retrain command (`--channel whatsapp volte
+  playback`) + gate instructions.
+- App: **"Test with audio file"** scan (dialpad button) — SAF file picker →
+  `AudioProcessor.decodePcm16Wav` → the SAME ONNX scoring path, no acoustic
+  loop. This is the deterministic demo path (Module E's audio_decode_bridge,
+  finally ported). `Monitor:` line now prints peak/noise dBFS.
+- Kotlin: `MainActivity` `pickAudioForTest` (ACTION_OPEN_DOCUMENT, ≤25 MB).
+
+**Next (real fix, needs the corpus — `data/` is deleted here):** retrain
+`voice_guard_v12_playback` per README wherever the audio lives, pass BOTH
+`eval_held_out_dirs_seqcnn.py` AND `eval_playback_loop.py`, then copy
+`model.onnx` to `../assets/models/voice_detector.onnx`, rebuild, and re-verify
+on-device (Live Mic Test + Logcat `Monitor:` raw= line).
+
 ## Current status (2026-09-09)
 
 **We are close to real-time on-device AI-voice detection working end to
