@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../providers/call_state_provider.dart';
 import '../providers/risk_score_provider.dart';
 import '../providers/settings_provider.dart';
@@ -9,13 +8,9 @@ import '../providers/calibration_provider.dart';
 import '../services/call_service.dart';
 import '../services/audio_service.dart';
 import '../services/notification_service.dart';
-import '../widgets/shad_risk_meter.dart';
-import '../widgets/shad_waveform.dart';
-import '../widgets/shad_glass_card.dart';
-import '../widgets/shad_glass_scaffold.dart';
-import '../widgets/shad_badge.dart';
-import '../widgets/shad_button.dart';
-import '../design/tokens.dart';
+import '../widgets/risk_meter.dart';
+import '../widgets/waveform_visualizer.dart';
+import '../utils/constants.dart';
 import '../models/call_state.dart';
 import '../models/call_log.dart';
 import '../models/risk_score.dart';
@@ -38,8 +33,11 @@ class _CallScreenState extends State<CallScreen> {
   StreamSubscription<double>? _scoreSub;
   StreamSubscription<List<double>>? _pcmSub;
   StreamSubscription<bool>? _signalSub;
+  StreamSubscription<(String?, double)>? _attackTypeSub;
   Timer? _captureStatusTimer;
   CaptureStatus? _captureStatus;
+  String? _attackType;
+  double _attackConfidence = 0.0;
 
   @override
   void initState() {
@@ -66,7 +64,7 @@ class _CallScreenState extends State<CallScreen> {
       if (isDef) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            backgroundColor: ShadTokens.verified,
+            backgroundColor: Color(0xFF2E7D32),
             content: Text('Vaani is now your default phone dialer!'),
           ),
         );
@@ -112,6 +110,26 @@ class _CallScreenState extends State<CallScreen> {
       if (!mounted) return;
       riskProvider.setHasSignal(hasSignal);
     });
+
+    _attackTypeSub = audio.attackTypeStream.listen((event) {
+      if (!mounted) return;
+      final (attackType, attackConfidence) = event;
+      setState(() {
+        _attackType = attackType;
+        _attackConfidence = attackConfidence;
+      });
+    });
+  }
+
+  /// Sub-label shown alongside "AI DETECTED" — never standalone, never
+  /// below the confidence threshold (see
+  /// docs/superpowers/specs/2026-09-11-attack-type-differentiator-design.md §6).
+  String? _attackTypeSubLabel(String verdict) {
+    const confidenceThreshold = 0.70; // draft value from the design spec §6, tune during on-device testing
+    if (verdict != 'AI DETECTED' || _attackType == null || _attackConfidence < confidenceThreshold) {
+      return null;
+    }
+    return _attackType == 'vc' ? 'Voice conversion' : 'Synthetic voice';
   }
 
   @override
@@ -119,6 +137,7 @@ class _CallScreenState extends State<CallScreen> {
     _scoreSub?.cancel();
     _pcmSub?.cancel();
     _signalSub?.cancel();
+    _attackTypeSub?.cancel();
     _captureStatusTimer?.cancel();
     super.dispose();
   }
@@ -160,6 +179,10 @@ class _CallScreenState extends State<CallScreen> {
     _callStartTime = DateTime.now();
     callState.setStatus(CallStatus.dialing, number: _dialNumber);
 
+    // Detection (forced speaker + capture) is opt-in — see _toggleDetection —
+    // so placing a call no longer auto-starts it. This lets the call route
+    // normally (including to an already-connected headset) until the user
+    // explicitly asks to monitor it.
     final placed = await calls.placeCall(_dialNumber);
     if (!placed) {
       if (mounted) {
@@ -172,8 +195,10 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _toggleLiveMic() async {
     if (_liveMicActive) {
+      // Stop live mic and finalize recording + log
       await _endCall();
     } else {
+      // Start live mic test
       final calls = context.read<CallService>();
       final audio = context.read<AudioService>();
       final callState = context.read<CallStateProvider>();
@@ -190,6 +215,11 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  /// Toggles detection (forced-speaker acoustic capture) for a real, already-
+  /// connected call. Kept separate from _toggleLiveMic, which is the no-call
+  /// self-test path. Off by default so a normal call — including one routed
+  /// to a connected BT/wired headset — behaves like any other call until the
+  /// user explicitly asks to monitor it.
   Future<void> _toggleDetection() async {
     final calls = context.read<CallService>();
     final audio = context.read<AudioService>();
@@ -233,6 +263,7 @@ class _CallScreenState extends State<CallScreen> {
     await calls.stopCallDetection();
     await calls.hideOverlay();
 
+    // Small delay to allow AudioCaptureManager to flush and close WAV file
     await Future.delayed(const Duration(milliseconds: 300));
     final recPath = await calls.getLastRecordingPath();
     final curRisk = risk.current;
@@ -280,58 +311,32 @@ class _CallScreenState extends State<CallScreen> {
     final risk = riskProvider.current;
     final score = risk?.score ?? 0.0;
     final isCallInProgress = call.state.isActive || call.state.isDialing || call.state.isIncoming || _liveMicActive;
-    final verdict = risk?.label ?? ShadRiskMeter.verdictFor(score);
-    final color = risk?.color ?? ShadRiskMeter.colorFor(score);
+    final verdict = risk?.label ?? AppConstants.verdictFor(score);
+    final color = risk?.color ?? AppConstants.colorFor(score);
     final scoringHasSignal = riskProvider.hasSignal;
 
-    return ShadGlassScaffold(
+    return Scaffold(
+      backgroundColor: AppColors.surface,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: Colors.white,
         elevation: 0,
-        scrolledUnderElevation: 0,
-        title: Text(
-          isCallInProgress ? 'Acoustic Defense Monitor' : 'Dialer & Live Detection',
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.3,
-            color: ShadTokens.foreground,
-          ),
-        ),
+        title: Text(isCallInProgress ? 'Active Call Detection' : 'Dialer & Live Detection',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
         actions: [
           IconButton(
-            tooltip: _liveMicActive ? 'Stop Live Mic' : 'Live Mic Acoustic Test',
-            icon: Container(
-              padding: const EdgeInsets.all(7),
-              decoration: BoxDecoration(
-                color: _liveMicActive ? ShadTokens.destructive : const Color(0xFFF4F4F5),
-                borderRadius: BorderRadius.circular(ShadTokens.radiusMd),
-                border: Border.all(color: _liveMicActive ? ShadTokens.destructive : ShadTokens.border),
-              ),
-              child: Icon(
-                _liveMicActive ? LucideIcons.square : LucideIcons.mic,
-                size: 17,
-                color: _liveMicActive ? Colors.white : ShadTokens.foreground,
-              ),
-            ),
+            tooltip: _liveMicActive ? 'Stop Live Mic' : 'Start Live Mic Test',
+            icon: Icon(_liveMicActive ? Icons.mic : Icons.mic_none, color: _liveMicActive ? AppColors.detected : AppColors.primary),
             onPressed: _toggleLiveMic,
           ),
-          const SizedBox(width: 8),
         ],
       ),
       body: isCallInProgress
-          ? _buildActiveCallView(
-              call: call,
-              score: score,
-              verdict: verdict,
-              color: color,
-              scoringHasSignal: scoringHasSignal,
-            )
+          ? _buildActiveCallView(call: call, score: score, verdict: verdict, color: color, scoringHasSignal: scoringHasSignal)
           : _buildDialpadView(),
     );
   }
 
-  // ── VIEW 1: ACTIVE CALL & REAL-TIME INFERENCE ──
+  // ---- VIEW 1: ACTIVE CALL & REAL-TIME INFERENCE ----
   Widget _buildActiveCallView({
     required CallStateProvider call,
     required double score,
@@ -340,411 +345,395 @@ class _CallScreenState extends State<CallScreen> {
     required bool scoringHasSignal,
   }) {
     final audio = context.read<AudioService>();
-    final callerLabel = call.state.number ?? (_dialNumber.isNotEmpty ? _dialNumber : 'Live Acoustic Scanner');
-
     return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      padding: const EdgeInsets.all(16),
       children: [
-        // ── Caller Banner Card ──
-        ShadGlassCard(
-          padding: const EdgeInsets.all(ShadTokens.space4),
-          child: Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(ShadTokens.radiusMd),
-                ),
-                child: Icon(LucideIcons.user, color: color, size: 24),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      callerLabel,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.3,
-                        color: ShadTokens.foreground,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 3),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 4,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Text(
-                          call.state.isDialing ? 'Dialing...' : 'Live • ${call.elapsedLabel}',
-                          style: const TextStyle(fontSize: 11, color: ShadTokens.muted, fontWeight: FontWeight.w500),
-                        ),
-                        ShadBadge(
-                          label: scoringHasSignal ? 'VOICE DETECTED' : 'SILENCE',
-                          variant: scoringHasSignal ? ShadBadgeVariant.verified : ShadBadgeVariant.secondary,
-                          showDot: true,
-                        ),
-                        if (_captureStatus?.source != null)
-                          ShadBadge(
-                            label: _captureStatus!.source!,
-                            variant: ShadBadgeVariant.outline,
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
+        // Caller card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12)],
           ),
-        ),
-        const SizedBox(height: 16),
-
-        // ── Carrier Detection Opt-in (if normal call) ──
-        if (!_liveMicActive && call.state.isActive) ...[
-          ShadGlassCard(
-            padding: const EdgeInsets.all(ShadTokens.space3),
-            tintColor: _detectionActive ? const Color(0xFFF0FDF4) : Colors.white,
-            child: Row(
-              children: [
-                Icon(
-                  _detectionActive ? LucideIcons.shieldCheck : LucideIcons.shield,
-                  color: _detectionActive ? ShadTokens.verified : ShadTokens.muted,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _detectionActive ? 'Acoustic Monitoring Running' : 'Acoustic Monitoring Idle',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: _detectionActive ? ShadTokens.verified : ShadTokens.foreground,
-                        ),
-                      ),
-                      Text(
-                        _detectionActive
-                            ? 'Speakerphone engaged so mic can capture remote caller audio.'
-                            : 'Normal call audio. Turn on to score incoming voice.',
-                        style: const TextStyle(fontSize: 10, color: ShadTokens.muted),
-                      ),
-                    ],
-                  ),
-                ),
-                ShadButton(
-                  onTap: _toggleDetection,
-                  variant: _detectionActive ? ShadButtonVariant.outline : ShadButtonVariant.primary,
-                  size: ShadButtonSize.sm,
-                  text: _detectionActive ? 'Stop' : 'Start Monitor',
-                ),
-              ],
+          child: Row(children: [
+            CircleAvatar(
+              radius: 26,
+              backgroundColor: color.withValues(alpha: 0.15),
+              child: Icon(Icons.person, color: color, size: 28),
             ),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(call.state.number ?? (_dialNumber.isNotEmpty ? _dialNumber : 'Active Call'),
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 2),
+              Text(call.state.isDialing ? 'Dialing...' : 'Connected • ${call.elapsedLabel}',
+                  style: TextStyle(fontSize: 12, color: Colors.black.withValues(alpha: 0.6))),
+            ])),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(999)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                const SizedBox(width: 6),
+                Text(verdict == 'AI DETECTED' ? 'ALERT' : 'LIVE',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: color)),
+              ]),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 14),
+
+        // Detection is opt-in for real calls (not the Live Mic self-test):
+        // starting it forces the speaker (needed for the mic to overhear the
+        // far end) and overrides a connected headset for the call's duration.
+        if (!_liveMicActive && call.state.isActive) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _detectionActive ? AppColors.primary.withValues(alpha: 0.08) : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _detectionActive ? AppColors.primary.withValues(alpha: 0.3) : Colors.black12),
+            ),
+            child: Row(children: [
+              Icon(_detectionActive ? Icons.shield : Icons.shield_outlined,
+                  color: _detectionActive ? AppColors.primary : Colors.black54, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(_detectionActive ? 'Detection running' : 'Detection off',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                  Text(
+                    _detectionActive
+                        ? 'Speaker forced on so the mic can monitor this call.'
+                        : 'Call audio routes normally (including to a connected headset).',
+                    style: TextStyle(fontSize: 10, color: Colors.black.withValues(alpha: 0.6)),
+                  ),
+                ]),
+              ),
+              TextButton(
+                onPressed: _toggleDetection,
+                style: TextButton.styleFrom(
+                  backgroundColor: _detectionActive ? Colors.black12 : AppColors.primary,
+                  foregroundColor: _detectionActive ? Colors.black87 : Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(_detectionActive ? 'Stop' : 'Start Detection',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+              ),
+            ]),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
         ],
 
-        // ── Central High-Impact Risk Meter ──
-        Center(
-          child: ShadRiskMeter(
-            score: score,
-            size: 200,
-            showLegend: true,
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // ── Security Advisory Banner ──
-        ShadGlassCard(
-          padding: const EdgeInsets.all(ShadTokens.space4),
-          tintColor: ShadRiskMeter.bgFor(score),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                verdict == 'AI DETECTED'
-                    ? LucideIcons.alertTriangle
-                    : (verdict == 'SUSPICIOUS' ? LucideIcons.alertCircle : LucideIcons.shieldCheck),
-                color: color,
-                size: 18,
+        if (_captureStatus?.source == 'VOICE_CALL') ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.green.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.verified_user_outlined, color: Colors.green, size: 22),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Privileged capture active — real call audio, not the acoustic (mic) fallback.',
+                  style: TextStyle(fontSize: 11, color: Colors.black87, height: 1.3, fontWeight: FontWeight.w600),
+                ),
               ),
-              const SizedBox(width: 12),
+            ]),
+          ),
+          const SizedBox(height: 14),
+        ],
+
+        if (_captureStatus != null && !_captureStatus!.hasSignal) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.mic_off_outlined, color: Colors.orange, size: 22),
+              const SizedBox(width: 10),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      verdict,
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _adviceFor(verdict),
-                      style: const TextStyle(fontSize: 11, color: ShadTokens.foreground, height: 1.35),
-                    ),
-                  ],
+                child: Text(
+                  'No live audio reaching the mic (source: ${_captureStatus!.source ?? 'unknown'}). '
+                  'Turn on speakerphone so the other side\'s voice can be heard by the mic.',
+                  style: const TextStyle(fontSize: 11, color: Colors.black87, height: 1.3),
                 ),
               ),
-            ],
+            ]),
           ),
-        ),
-        const SizedBox(height: 16),
+          const SizedBox(height: 14),
+        ],
 
-        // ── Real-time Waveform Visualizer ──
-        ShadGlassCard(
-          padding: const EdgeInsets.all(ShadTokens.space4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: const [
-                  Text(
-                    'Microphone Telephony Stream',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: ShadTokens.foreground),
-                  ),
-                  ShadBadge(label: '16 kHz PCM', variant: ShadBadgeVariant.outline),
-                ],
-              ),
-              const SizedBox(height: 12),
-              ShadWaveform(samples: _liveWaveform, color: color, height: 48),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // ── Benchmark Test Injection (Judges / SIH Verification) ──
-        ShadGlassCard(
-          padding: const EdgeInsets.all(ShadTokens.space3),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Model Validation & Injections',
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: ShadTokens.muted),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: ShadButton(
-                      onTap: () => audio.injectBenchmarkTest(isAiVoice: false),
-                      variant: ShadButtonVariant.outline,
-                      size: ShadButtonSize.sm,
-                      icon: const Icon(LucideIcons.checkCircle2, color: ShadTokens.verified, size: 14),
-                      text: 'Human Voice',
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ShadButton(
-                      onTap: () => audio.injectBenchmarkTest(isAiVoice: true),
-                      variant: ShadButtonVariant.outline,
-                      size: ShadButtonSize.sm,
-                      icon: const Icon(LucideIcons.alertTriangle, color: ShadTokens.detected, size: 14),
-                      text: 'AI Clone Clip',
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 24),
-
-        // ── In-Call Action Dock ──
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            _circleAction(
-              icon: _speakerphoneOn ? LucideIcons.volume2 : LucideIcons.volume1,
-              label: _speakerphoneOn ? 'Speaker On' : 'Speaker Off',
-              active: _speakerphoneOn,
-              onTap: _toggleSpeakerphone,
+        // Live Risk Meter (TFLite Inference)
+        RiskMeter(score: score),
+        if (!scoringHasSignal) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.blueGrey.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
             ),
-            // End Call
-            GestureDetector(
-              onTap: _endCall,
-              child: Container(
-                width: 60,
-                height: 60,
-                decoration: const BoxDecoration(
-                  color: ShadTokens.destructive,
-                  shape: BoxShape.circle,
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.volume_off_outlined, size: 16, color: Colors.blueGrey),
+              const SizedBox(width: 8),
+              Text('Quiet — score paused until voice resumes (last: ${(score * 100).round()}%)',
+                  style: const TextStyle(fontSize: 11, color: Colors.blueGrey, fontWeight: FontWeight.w600)),
+            ]),
+          ),
+        ],
+        const SizedBox(height: 14),
+
+        // Live Verdict Banner
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color.withValues(alpha: 0.25)),
+          ),
+          child: Row(children: [
+            Icon(verdict == 'AI DETECTED' ? Icons.warning_rounded : verdict == 'SUSPICIOUS' ? Icons.error_outline : Icons.verified_user_rounded, color: color, size: 28),
+            const SizedBox(width: 10),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Text(verdict, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: color)),
+                if (_attackTypeSubLabel(verdict) case final String subLabel) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)),
+                    child: Text(subLabel, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color)),
+                  ),
+                ],
+              ]),
+              const SizedBox(height: 2),
+              Text(_adviceFor(verdict), style: TextStyle(fontSize: 11, color: Colors.black.withValues(alpha: 0.7), height: 1.3)),
+            ])),
+          ]),
+        ),
+        const SizedBox(height: 14),
+
+        // Live Audio Waveform (Driven by real 16kHz microphone stream)
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.black12)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              const Text('Live Microphone Audio Stream', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+              Text('16 kHz • TFLite', style: TextStyle(fontSize: 10, color: Colors.black.withValues(alpha: 0.5))),
+            ]),
+            const SizedBox(height: 10),
+            WaveformVisualizer(samples: _liveWaveform, color: color),
+            const SizedBox(height: 8),
+            Text('Evaluating 60-band spectral filterbanks + prosody every 1s on-device via TFLite.',
+                style: TextStyle(fontSize: 10, color: Colors.black.withValues(alpha: 0.55))),
+          ]),
+        ),
+        const SizedBox(height: 16),
+
+        // Quick Benchmark Injection (For instant testing without phone calls)
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.black12)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Benchmark Model Verification', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.textSecondary)),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => audio.injectBenchmarkTest(isAiVoice: false),
+                  icon: const Icon(Icons.check_circle_outline, color: AppColors.verified, size: 16),
+                  label: const Text('Human Speech', style: TextStyle(fontSize: 11, color: AppColors.verified)),
+                  style: OutlinedButton.styleFrom(side: const BorderSide(color: AppColors.verified)),
                 ),
-                child: const Icon(LucideIcons.phoneOff, color: Colors.white, size: 24),
               ),
-            ),
-            _circleAction(
-              icon: _micMuted ? LucideIcons.micOff : LucideIcons.mic,
-              label: _micMuted ? 'Muted' : 'Mic On',
-              active: !_micMuted,
-              onTap: _toggleMicMute,
-            ),
-          ],
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => audio.injectBenchmarkTest(isAiVoice: true),
+                  icon: const Icon(Icons.warning_amber_rounded, color: AppColors.detected, size: 16),
+                  label: const Text('AI Clone Audio', style: TextStyle(fontSize: 11, color: AppColors.detected)),
+                  style: OutlinedButton.styleFrom(side: const BorderSide(color: AppColors.detected)),
+                ),
+              ),
+            ]),
+          ]),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 20),
+
+        // In-Call Action Bar (Speakerphone, Mute, End Call)
+        Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+          _circleAction(
+            icon: _speakerphoneOn ? Icons.volume_up : Icons.volume_down,
+            label: _speakerphoneOn ? 'Speaker On' : 'Speaker Off',
+            color: _speakerphoneOn ? AppColors.primary : Colors.black54,
+            bg: _speakerphoneOn ? AppColors.primary.withValues(alpha: 0.12) : const Color(0xFFF0F0F0),
+            onTap: _toggleSpeakerphone,
+          ),
+          _circleAction(
+            icon: Icons.call_end,
+            label: 'End Call',
+            color: Colors.white,
+            bg: AppColors.detected,
+            size: 64,
+            onTap: _endCall,
+          ),
+          _circleAction(
+            icon: _micMuted ? Icons.mic_off : Icons.mic,
+            label: _micMuted ? 'Muted' : 'Mic On',
+            color: _micMuted ? Colors.black54 : AppColors.primary,
+            bg: _micMuted ? const Color(0xFFF0F0F0) : AppColors.primary.withValues(alpha: 0.12),
+            onTap: _toggleMicMute,
+          ),
+        ]),
+        const SizedBox(height: 20),
       ],
     );
   }
 
-  // ── VIEW 2: INTERACTIVE DIALPAD ──
+  // ---- VIEW 2: INTERACTIVE DIALPAD ----
   Widget _buildDialpadView() {
     return Column(
       children: [
         if (!_isDefaultDialer)
-          ShadGlassCard(
-            margin: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+            ),
             child: Row(
               children: [
-                const Icon(LucideIcons.shield, color: ShadTokens.primary, size: 18),
+                const Icon(Icons.shield_outlined, color: AppColors.primary, size: 22),
                 const SizedBox(width: 10),
                 const Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Set as Default Phone App',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: ShadTokens.foreground),
+                        'Set Vaani as Default Phone App',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.primary),
                       ),
+                      SizedBox(height: 2),
                       Text(
-                        'Enables native call interception via InCallService',
-                        style: TextStyle(fontSize: 10, color: ShadTokens.muted),
+                        'Enables native in-call detection & audio recording',
+                        style: TextStyle(fontSize: 10, color: Colors.black54),
                       ),
                     ],
                   ),
                 ),
-                ShadButton(
-                  onTap: _requestDefaultDialer,
-                  variant: ShadButtonVariant.primary,
-                  size: ShadButtonSize.sm,
-                  text: 'Enable',
+                TextButton(
+                  onPressed: _requestDefaultDialer,
+                  style: TextButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('Set Default', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
                 ),
               ],
             ),
           ),
 
-        // ── Number Display Box ──
+        // Number display box
         Expanded(
           flex: 2,
           child: Container(
             alignment: Alignment.center,
             padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  _dialNumber.isEmpty ? 'Enter Number' : _dialNumber,
-                  style: TextStyle(
-                    fontSize: _dialNumber.length > 10 ? 28 : 34,
-                    fontWeight: FontWeight.w800,
-                    color: _dialNumber.isEmpty ? ShadTokens.mutedFg : ShadTokens.foreground,
-                    letterSpacing: 1.5,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Text(
+                _dialNumber.isEmpty ? 'Enter Number' : _dialNumber,
+                style: TextStyle(
+                  fontSize: _dialNumber.length > 10 ? 28 : 34,
+                  fontWeight: FontWeight.w800,
+                  color: _dialNumber.isEmpty ? Colors.black38 : AppColors.textPrimary,
+                  letterSpacing: 1.5,
                 ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Monitored via on-device ONNX Runtime inference',
-                  style: TextStyle(fontSize: 11, color: ShadTokens.muted),
-                ),
-              ],
-            ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              Text('Vaani will monitor audio via on-device ONNX Runtime',
+                  style: TextStyle(fontSize: 12, color: Colors.black.withValues(alpha: 0.5))),
+            ]),
           ),
         ),
 
-        // ── Dialpad Grid (0-9, *, #) ──
+        // Dialpad Grid (0-9, *, #)
         Expanded(
           flex: 6,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 36),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _dialRow(['1', '2', '3'], ['', 'ABC', 'DEF']),
-                _dialRow(['4', '5', '6'], ['GHI', 'JKL', 'MNO']),
-                _dialRow(['7', '8', '9'], ['PQRS', 'TUV', 'WXYZ']),
-                _dialRow(['*', '0', '#'], ['', '+', '']),
-              ],
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: Column(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+              _dialRow(['1', '2', '3'], ['', 'ABC', 'DEF']),
+              _dialRow(['4', '5', '6'], ['GHI', 'JKL', 'MNO']),
+              _dialRow(['7', '8', '9'], ['PQRS', 'TUV', 'WXYZ']),
+              _dialRow(['*', '0', '#'], ['', '+', '']),
+            ]),
           ),
         ),
 
-        // ── Action Bar: Live Mic, Call, Backspace ──
+        // Bottom action row: Live Mic Test, Call Button, Backspace
         Padding(
           padding: const EdgeInsets.only(bottom: 24, left: 32, right: 32),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              // Live Mic mode button
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF4F4F5),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: ShadTokens.border),
-                ),
-                child: IconButton(
-                  tooltip: 'Start Live Mic Acoustic Test',
-                  icon: const Icon(LucideIcons.mic, size: 22, color: ShadTokens.foreground),
-                  onPressed: _toggleLiveMic,
-                ),
-              ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+            // Live Mic mode button
+            IconButton(
+              tooltip: 'Start Live Mic Acoustic Test',
+              icon: const Icon(Icons.mic, size: 28, color: AppColors.primary),
+              onPressed: _toggleLiveMic,
+            ),
 
-              // Large Call Button
-              GestureDetector(
-                onTap: _startOutgoingCall,
-                child: Container(
-                  width: 64,
-                  height: 64,
-                  decoration: const BoxDecoration(
-                    color: ShadTokens.verified,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(LucideIcons.phoneCall, color: Colors.white, size: 28),
-                ),
-              ),
-
-              // Backspace button
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF4F4F5),
+            // Big Green Call Button
+            GestureDetector(
+              onTap: _startOutgoingCall,
+              child: Container(
+                width: 68,
+                height: 68,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF2E7D32),
                   shape: BoxShape.circle,
-                  border: Border.all(color: ShadTokens.border),
+                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))],
                 ),
-                child: IconButton(
-                  tooltip: 'Delete',
-                  icon: const Icon(LucideIcons.delete, size: 20, color: ShadTokens.foreground),
-                  onPressed: _onBackspace,
-                  onLongPress: () => setState(() => _dialNumber = ''),
-                ),
+                child: const Icon(Icons.phone, color: Colors.white, size: 32),
               ),
-            ],
-          ),
+            ),
+
+            // Backspace button
+            IconButton(
+              tooltip: 'Delete',
+              icon: const Icon(Icons.backspace_outlined, size: 28, color: Colors.black54),
+              onPressed: _onBackspace,
+              onLongPress: () => setState(() => _dialNumber = ''),
+            ),
+          ]),
         ),
       ],
     );
   }
 
   Widget _dialRow(List<String> digits, List<String> subs) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: [
-        for (int i = 0; i < 3; i++) _dialKey(digits[i], subs[i]),
-      ],
-    );
+    return Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+      for (int i = 0; i < 3; i++)
+        _dialKey(digits[i], subs[i]),
+    ]);
   }
 
   Widget _dialKey(String digit, String sub) {
@@ -753,36 +742,18 @@ class _CallScreenState extends State<CallScreen> {
       onLongPress: digit == '0' ? () => _onDigitPress('+') : null,
       borderRadius: BorderRadius.circular(40),
       child: Container(
-        width: 68,
-        height: 68,
+        width: 72,
+        height: 72,
         decoration: BoxDecoration(
           color: Colors.white,
           shape: BoxShape.circle,
-          border: Border.all(color: ShadTokens.border),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6)],
         ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              digit,
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.w700,
-                color: ShadTokens.foreground,
-              ),
-            ),
-            if (sub.isNotEmpty)
-              Text(
-                sub,
-                style: const TextStyle(
-                  fontSize: 8,
-                  fontWeight: FontWeight.w600,
-                  color: ShadTokens.muted,
-                  letterSpacing: 1.0,
-                ),
-              ),
-          ],
-        ),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Text(digit, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+          if (sub.isNotEmpty)
+            Text(sub, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Colors.black45, letterSpacing: 1.0)),
+        ]),
       ),
     );
   }
@@ -790,38 +761,25 @@ class _CallScreenState extends State<CallScreen> {
   Widget _circleAction({
     required IconData icon,
     required String label,
-    required bool active,
+    required Color color,
+    required Color bg,
+    double size = 52,
     required VoidCallback onTap,
   }) {
-    return Column(
-      children: [
-        InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(26),
-          child: Container(
-            width: 50,
-            height: 50,
-            decoration: BoxDecoration(
-              color: active ? ShadTokens.primary : Colors.white,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: active ? ShadTokens.primary : ShadTokens.border,
-              ),
-            ),
-            child: Icon(
-              icon,
-              color: active ? ShadTokens.primaryFg : ShadTokens.foreground,
-              size: 22,
-            ),
-          ),
+    return Column(children: [
+      InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(size / 2),
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
+          child: Icon(icon, color: color, size: size * 0.48),
         ),
-        const SizedBox(height: 6),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: ShadTokens.muted),
-        ),
-      ],
-    );
+      ),
+      const SizedBox(height: 6),
+      Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.black54)),
+    ]);
   }
 
   String _adviceFor(String verdict) {
@@ -835,3 +793,4 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 }
+

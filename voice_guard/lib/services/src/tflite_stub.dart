@@ -11,25 +11,32 @@ class TFLiteService {
     _ready = false;
   }
 
-  Future<double> infer(List<double> lfcc, List<double> prosody, List<double> physio) async =>
-      _heuristic(lfcc, prosody);
+  Future<(double, String?, double)> infer(List<List<double>> lfccSequence, List<double> scalars) async =>
+      (_heuristic(lfccSequence, scalars), null, 0.0);
 
-  double _heuristic(List<double> lfcc, List<double> prosody) {
-    if (lfcc.isEmpty) return 0.15;
-    final high = lfcc.sublist((lfcc.length * 0.6).floor());
+  double _heuristic(List<List<double>> lfccSequence, List<double> scalars) {
+    // Kept independent from tflite_io.dart's copy per this project's
+    // existing convention (tflite_stub.dart has never imported from
+    // tflite_io.dart) — identical body, duplicated deliberately.
+    if (lfccSequence.isEmpty) return 0.15;
+    final pooled = List<double>.filled(60, 0);
+    for (final frame in lfccSequence) {
+      for (int i = 0; i < 60; i++) { pooled[i] += frame[i]; }
+    }
+    for (int i = 0; i < 60; i++) { pooled[i] /= lfccSequence.length; }
+    final high = pooled.sublist((pooled.length * 0.6).floor());
     final meanH = high.reduce((a, b) => a + b) / high.length;
     final varH = high.map((v) => (v - meanH) * (v - meanH)).reduce((a, b) => a + b) / high.length;
-    final pauseRatio = prosody.isNotEmpty ? prosody[0] : 0.2;
-    double raw = (varH * 0.9 + pauseRatio * 0.25 + (lfcc[0].abs() * 0.05)).clamp(0.0, 1.0);
+    final pauseRatio = scalars.isNotEmpty ? scalars[0] : 0.2;
+    double raw = (varH * 0.9 + pauseRatio * 0.25 + (pooled[0].abs() * 0.05)).clamp(0.0, 1.0);
     raw = 0.08 + raw * 0.78;
     return raw;
   }
 
-  Future<double> scoreChunk(List<double> pcm) {
-    final lfcc = AudioProcessor.extractLfcc(pcm);
-    final prosody = AudioProcessor.extractProsody(pcm);
-    final physio = AudioProcessor.extractPhysio(pcm);
-    return infer(lfcc, prosody, physio);
+  Future<(double, String?, double)> scoreChunk(List<double> pcm) {
+    final lfccSequence = AudioProcessor.extractLfccSequence(pcm);
+    final scalars = AudioProcessor.extractScalars(pcm);
+    return infer(lfccSequence, scalars);
   }
 
   void dispose() {}

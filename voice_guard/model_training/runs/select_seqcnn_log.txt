@@ -1,0 +1,43 @@
+  ...500/3664 source files processed
+  ...1000/3664 source files processed
+  ...1500/3664 source files processed
+  ...2000/3664 source files processed
+  ...2500/3664 source files processed
+  ...3000/3664 source files processed
+  ...3500/3664 source files processed
+Per-source-directory yield (files in -> files surviving >=3s chunking -> windows out):
+  C:\Users\Tuviksh Murudkar\SIH\voice_guard\model_training\data\fake_itw_held: 1361 in -> 762 survived (56%) -> 1597 windows
+  C:\Users\Tuviksh Murudkar\SIH\voice_guard\model_training\data\real_noise_aug_split\held\en_native: 1703 in -> 426 survived (25%) -> 510 windows  <-- >50% of files produced ZERO training examples
+  C:\Users\Tuviksh Murudkar\SIH\voice_guard\model_training\data\real_noise_aug_split\held\hi_native: 600 in -> 364 survived (61%) -> 454 windows
+C:\Users\Tuviksh Murudkar\SIH\.worktrees\voiceguard-track3-track4-seqcnn\voice_guard\model_training\select_best_checkpoint_seqcnn.py:88: DeprecationWarning: You are using the legacy TorchScript-based ONNX export. Starting in PyTorch 2.9, the new torch.export-based ONNX exporter has become the default. Learn more about the new export logic: https://docs.pytorch.org/docs/stable/onnx_export.html. For exporting control flow: https://pytorch.org/tutorials/beginner/onnx/export_control_flow_model_to_onnx_tutorial.html
+  torch.onnx.export(
+Building held-out features once (25 checkpoints to sweep)...
+2561 windows from 1552 source files
+  epoch_01.pt: held-out EER=0.1140
+  epoch_02.pt: held-out EER=0.0925
+  epoch_03.pt: held-out EER=0.0910
+  epoch_04.pt: held-out EER=0.0789
+  epoch_05.pt: held-out EER=0.0871
+  epoch_06.pt: held-out EER=0.0851
+  epoch_07.pt: held-out EER=0.0828
+  epoch_08.pt: held-out EER=0.0831
+  epoch_09.pt: held-out EER=0.0766
+  epoch_10.pt: held-out EER=0.0797
+  epoch_11.pt: held-out EER=0.0800
+  epoch_12.pt: held-out EER=0.0831
+  epoch_13.pt: held-out EER=0.0777
+  epoch_14.pt: held-out EER=0.0715
+  epoch_15.pt: held-out EER=0.0675
+  epoch_16.pt: held-out EER=0.0746
+  epoch_17.pt: held-out EER=0.0706
+  epoch_18.pt: held-out EER=0.0644
+  epoch_19.pt: held-out EER=0.0726
+  epoch_20.pt: held-out EER=0.0672
+  epoch_21.pt: held-out EER=0.0695
+  epoch_22.pt: held-out EER=0.0613
+  epoch_23.pt: held-out EER=0.0780
+  epoch_24.pt: held-out EER=0.0644
+  epoch_25.pt: held-out EER=0.0675
+
+Best: epoch_22.pt  EER=0.0613
+Wrote model.pt / model.onnx / norm_stats.npz / checkpoint_sweep.json -> runs\voice_guard_v11_seqcnn_selected

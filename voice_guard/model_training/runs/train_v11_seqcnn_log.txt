@@ -1,0 +1,29 @@
+Training device: cuda
+Building examples (channels=[None])...
+65649 train windows / 16447 val windows from 69044 source files
+epoch 1/25  train_loss=0.6922  val_eer=0.0939
+epoch 2/25  train_loss=0.4422  val_eer=0.0694
+epoch 3/25  train_loss=0.3763  val_eer=0.0597
+epoch 4/25  train_loss=0.3414  val_eer=0.0589
+epoch 5/25  train_loss=0.3162  val_eer=0.0543
+epoch 6/25  train_loss=0.3063  val_eer=0.0543
+epoch 7/25  train_loss=0.2900  val_eer=0.0516
+epoch 8/25  train_loss=0.2830  val_eer=0.0516
+epoch 9/25  train_loss=0.2696  val_eer=0.0500
+epoch 10/25  train_loss=0.2697  val_eer=0.0511
+epoch 11/25  train_loss=0.2610  val_eer=0.0516
+epoch 12/25  train_loss=0.2586  val_eer=0.0495
+epoch 13/25  train_loss=0.2550  val_eer=0.0485
+epoch 14/25  train_loss=0.2474  val_eer=0.0481
+epoch 15/25  train_loss=0.2460  val_eer=0.0505
+epoch 16/25  train_loss=0.2410  val_eer=0.0479
+epoch 17/25  train_loss=0.2377  val_eer=0.0468
+epoch 18/25  train_loss=0.2320  val_eer=0.0458
+epoch 19/25  train_loss=0.2346  val_eer=0.0492
+epoch 20/25  train_loss=0.2328  val_eer=0.0452
+epoch 21/25  train_loss=0.2260  val_eer=0.0465
+epoch 22/25  train_loss=0.2268  val_eer=0.0458
+epoch 23/25  train_loss=0.2208  val_eer=0.0458
+epoch 24/25  train_loss=0.2224  val_eer=0.0441
+epoch 25/25  train_loss=0.2195  val_eer=0.0463
+Saved model.pt / model.onnx / norm_stats.npz -> runs\voice_guard_v11_seqcnn

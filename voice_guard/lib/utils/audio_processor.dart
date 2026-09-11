@@ -14,22 +14,30 @@ class AudioProcessor {
   static const int nLfcc = 60;
   static const int nFilterBanks = 513;
 
-  /// 3s PCM16 buffer → 60 LFCC coefficients (mean-pooled over frames).
-  static List<double> extractLfcc(List<double> pcm) {
-    if (pcm.length < fftSize) return List.filled(nLfcc, 0);
+  /// Per-frame LFCC matrix (unpooled) — one inner list per frame, each
+  /// length 60. Mirrors features.py::extract_lfcc_sequence exactly.
+  static List<List<double>> extractLfccSequence(List<double> pcm) {
+    if (pcm.length < fftSize) return [];
     final frames = _frameSignal(pcm);
-    final filterbankEnergies = <List<double>>[];
-    for (final frame in frames) {
+    return frames.map((frame) {
       final windowed = _hamming(frame);
       final spectrum = _magnitudeSpectrum(windowed);
       final energies = _linearFilterbank(spectrum);
-      filterbankEnergies.add(energies);
-    }
-    // Log + DCT per frame, then mean-pool.
-    final lfccFrames = filterbankEnergies.map((e) {
-      final logE = e.map((v) => math.log(v + 1e-10)).toList();
+      final logE = energies.map((v) => math.log(v + 1e-10)).toList();
       return _dct(logE).sublist(0, nLfcc);
     }).toList();
+  }
+
+  /// [pauseRatio, energyVariance, zcrVariance, jitterLocal, shimmerLocal,
+  /// hnrDb] — prosody then physio. Mirrors features.py::extract_scalars.
+  static List<double> extractScalars(List<double> pcm) {
+    return [...extractProsody(pcm), ...extractPhysio(pcm)];
+  }
+
+  /// 3s PCM16 buffer → 60 LFCC coefficients (mean-pooled over frames).
+  static List<double> extractLfcc(List<double> pcm) {
+    if (pcm.length < fftSize) return List.filled(nLfcc, 0);
+    final lfccFrames = extractLfccSequence(pcm);
 
     final mean = List<double>.filled(nLfcc, 0);
     for (final f in lfccFrames) {

@@ -54,19 +54,24 @@ and `data/prep_in_the_wild.py`.
   different training mix and shouldn't be assumed to reproduce them exactly.
 
 **Feature contract (must not drift):** `features.py` is a numpy port of
-`lib/utils/audio_processor.dart`'s `extractLfcc`/`extractProsody`/
-`extractPhysio` — 60 LFCC (mean-pooled over 1024-pt/256-hop frames) + 3
-prosody scalars (`[pauseRatio, energyVariance, zcrVariance]`) + 3
-physiological voice-quality scalars (`[jitter_local, shimmer_local,
-hnr_db]`, added for the entity-vs-style confound remediation, see
-`docs/CRITICAL-entity-vs-style-confound.md` §4 item 2 and
-`docs/superpowers/plans/2026-09-11-physiological-features-plan.md`), 66
-floats total, in that concatenation order. `tflite_io.dart`'s
-`TFLiteService.infer` sends exactly this vector and expects a `(1, 2)`
-raw-logit output (it applies softmax itself). If you change frame size /
-hop / feature order on either side, change it on both — a Python-trained
-model is only as good as its parity with what the phone actually computes
-at inference time.
+`lib/utils/audio_processor.dart`'s `extractLfccSequence`/`extractScalars`
+— **two** ONNX inputs, not one flat vector (changed from the single-vector
+MLP contract by
+`docs/superpowers/plans/2026-09-11-frame-level-seq-model-and-attack-type-plan.md`,
+consolidating remediation tracks 2/3/4):
+
+- `lfcc_sequence`: shape `(1, n_frames, 60)` — the full per-frame LFCC
+  matrix (1024-pt/256-hop frames), unpooled.
+- `scalars`: shape `(1, 6)` — `[pauseRatio, energyVariance, zcrVariance,
+  jitter_local, shimmer_local, hnr_db]` (3 prosody + 3 physio, see
+  `docs/CRITICAL-entity-vs-style-confound.md` §4 item 2).
+
+`tflite_io.dart`'s `TFLiteService.infer` sends exactly these two tensors
+and expects **two** `(1, 2)` raw-logit outputs: `real_fake_logits` and
+`attack_type_logits` (softmax applied on the Dart side for both). If you
+change frame size / hop / feature order / model I/O names on either side,
+change it on both — a Python-trained model is only as good as its parity
+with what the phone actually computes at inference time.
 
 Normalization (mean/std) is baked into the exported model itself
 (`model.py::FixedNormalize`), not applied separately — there's no
@@ -101,7 +106,28 @@ was trained on:
 # 1. ASVspoof 2019 LA (train partition -> real/ fake/) — master plan §5.1
 kaggle datasets download -d anishsarkar22/asvpoof-2019-dataset-la -p data/extracted --unzip
 python data/split_flac_to_wav.py   # extracted/... -> data/real/, data/fake/
+```
 
+**Attack-type protocol only** (for track 4's TTS/VC labeling — does NOT
+need the multi-GB audio archive, `data/real`/`data/fake` are already
+extracted): re-download just the protocol file from the same Kaggle
+source used originally:
+
+```bash
+kaggle datasets download -d anishsarkar22/asvpoof-2019-dataset-la -p data/asvspoof2019_la_protocol_only --unzip -f "ASVspoof2019.LA.cm.train.trn.txt"
+```
+
+(If `-f` isn't supported by the installed `kaggle` CLI version, download
+the full dataset to a throwaway directory and delete everything except
+the protocol file afterward — it's a few hundred KB, the audio is
+multiple GB; do not leave the audio archive on disk.)
+
+The train protocol's column layout differs slightly from
+`trial_metadata.txt` (columns: `speaker_id utt_id - attack_id key`, no
+codec/tx/trim/subset columns) — `attack_labels.py::load_asvspoof_2019_train_attack_map`
+handles this format; `load_asvspoof_attack_map` handles the 2021 format.
+
+```bash
 # 2. ASVspoof 2021 LA eval + bundled 2019 LA dev (-> real2021/ fake2021/)
 #    already telephony-degraded by construction (real codec roundtrips),
 #    so these are NOT run through --channel in training.

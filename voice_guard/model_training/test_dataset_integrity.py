@@ -110,8 +110,8 @@ def test_split_by_source_keys_on_full_path_not_basename(tmp_path: Path):
 
 def test_split_by_source_never_shares_a_source_across_train_and_val():
     examples = [
-        Example(features=np.zeros(63, dtype=np.float32), label=0,
-                source_file=f"/a/{i}.wav", source_dir="/a")
+        Example(lfcc_seq=np.zeros((10, 60), dtype=np.float32), scalars=np.zeros(6, dtype=np.float32),
+                label=0, attack_type=-100, source_file=f"/a/{i}.wav", source_dir="/a")
         for i in range(20)
     ]
     train_ex, val_ex = split_by_source(examples, val_fraction=0.3)

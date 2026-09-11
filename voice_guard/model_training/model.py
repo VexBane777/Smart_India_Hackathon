@@ -63,3 +63,74 @@ class VoiceGuardMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(self.normalize(x))  # raw logits — Dart applies softmax itself
+
+
+class FixedNormalizeSeq(nn.Module):
+    """Per-LFCC-channel (x - mean) / std, broadcast across the time axis.
+    mean/std are (60,) — one pair of stats per LFCC coefficient index,
+    shared across all frame positions (not per-frame-position stats; see
+    track 3 plan §5's open question — this is the simpler of the two
+    options, chosen as the starting point)."""
+
+    def __init__(self, mean: np.ndarray, std: np.ndarray):
+        super().__init__()
+        assert mean.shape == std.shape
+        self.register_buffer("mean", torch.from_numpy(mean.astype(np.float32)))
+        self.register_buffer("std", torch.from_numpy(std.astype(np.float32)))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return (x - self.mean) / self.std  # broadcasts over (batch, time, 60)
+
+
+class VoiceGuardSeqCNN(nn.Module):
+    """Frame-level LFCC sequence -> Conv1d stack -> pooled embedding,
+    concatenated with normalized scalars, feeding two heads: real/fake
+    (trained on every example) and attack-type (trained only on labeled
+    fakes — see train_seq_cnn.py's masked loss). See track 3 plan §2.2 for
+    the architecture rationale (CNN over GRU/LSTM: stateless, simpler ONNX
+    export) and the track 4 design spec §4 for the dual-head design."""
+
+    def __init__(
+        self,
+        n_frames: int,
+        n_lfcc: int,
+        n_scalars: int,
+        seq_mean: np.ndarray,
+        seq_std: np.ndarray,
+        scalar_mean: np.ndarray,
+        scalar_std: np.ndarray,
+        conv_channels: tuple[int, ...] = (32, 16),
+        num_classes: int = 2,
+    ):
+        super().__init__()
+        self.seq_normalize = FixedNormalizeSeq(seq_mean, seq_std)
+        self.scalar_normalize = FixedNormalize(scalar_mean, scalar_std)
+
+        conv_layers: list[nn.Module] = []
+        in_ch = n_lfcc
+        for out_ch in conv_channels:
+            conv_layers += [nn.Conv1d(in_ch, out_ch, kernel_size=3, padding=1), nn.ReLU()]
+            in_ch = out_ch
+        self.conv = nn.Sequential(*conv_layers)
+        embedding_dim = in_ch * 2  # avg-pool + max-pool concatenated
+
+        trunk_in = embedding_dim + n_scalars
+        self.trunk = nn.Sequential(
+            nn.Linear(trunk_in, 32), nn.ReLU(),
+        )
+        self.real_fake_head = nn.Linear(32, num_classes)
+        self.attack_type_head = nn.Linear(32, num_classes)
+
+    def forward(self, seq: torch.Tensor, scalars: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        seq = self.seq_normalize(seq)  # (batch, time, 60)
+        seq = seq.transpose(1, 2)  # -> (batch, 60, time) for Conv1d
+        conv_out = self.conv(seq)  # (batch, channels, time)
+        avg_pool = conv_out.mean(dim=2)
+        max_pool = conv_out.amax(dim=2)
+        embedding = torch.cat([avg_pool, max_pool], dim=1)
+
+        scalars = self.scalar_normalize(scalars)
+        trunk_in = torch.cat([embedding, scalars], dim=1)
+        trunk_out = self.trunk(trunk_in)
+
+        return self.real_fake_head(trunk_out), self.attack_type_head(trunk_out)

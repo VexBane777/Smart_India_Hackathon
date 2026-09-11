@@ -1393,6 +1393,117 @@ retrain and confound/EER gate (same discipline as above, this time against
 the sequence-CNN architecture) is the next actual deploy decision — this
 MLP-plus-physio number is not it.
 
+## v11_seqcnn: tracks 2+3+4 consolidated retrain — passes the confound gate AND beats baseline EER (2026-09-11)
+
+Per `docs/superpowers/plans/2026-09-11-frame-level-seq-model-and-attack-type-plan.md`
+Task 8: a single consolidated architecture/training pass replacing the
+separate track 2 (physio), track 3 (frame-level sequence CNN), and track 4
+(TTS-vs-VC attack-type head) retrains — see that plan's Global Constraints
+for why. Branch `voiceguard-track3-track4-seqcnn`, worktree
+`.worktrees/voiceguard-track3-track4-seqcnn`.
+
+**Architecture:** `VoiceGuardSeqCNN` (`model_training/model.py`) — a
+per-frame LFCC sequence (n_frames × 60) through a small Conv1d stack
+(32→16 channels), avg+max pooled into an embedding, concatenated with the
+6 normalized prosody+physio scalars, feeding two heads: real/fake (every
+example) and attack-type (masked loss, labeled fakes only —
+`ignore_index=-100`, see `train_seq_cnn.py`'s `compute_masked_attack_type_loss`).
+
+**Training run:** `train_seq_cnn.py --channel none --workers 4 --weight-decay 1e-4
+--label-smoothing 0.05 --save-every-epoch-checkpoints --epochs 25`, GPU
+(cuda) device. **Real, disclosed deviation from v9_noisefix's corpus:**
+this run used a single channel recipe (`--channel none`) instead of v9's
+three (`whatsapp volte none`) — per-frame sequences are ~167x larger per
+example than track 2's pooled feature vectors, and three recipes caused
+two real OOM crashes during this session (workers hit 400-800MB each with
+8 workers/3 recipes; free memory crashed to 216MB within seconds — see the
+session's memory-crisis notes). This makes the corpus comparison to
+v9_noisefix informative about the architecture's effect, not a perfectly
+apples-to-apples "same corpus, different model" comparison — flagging this
+explicitly rather than absorbing it silently.
+
+**Checkpoint selection** (`select_best_checkpoint_seqcnn.py`, same
+held-out-EER-sweep methodology as v10_physio, swept against
+`data/real_noise_aug_split/held/{en_native,hi_native}` + `data/fake_itw_held`,
+2561 windows / 1552 source files): epoch_22 selected (held-out EER=0.0613),
+not the last epoch (epoch_25, EER=0.0675) — in-distribution `val_eer`
+bottomed out at epoch 24 (0.0441) but that is a different, more optimistic
+metric than cross-generator held-out EER; this project's established
+practice (see v10_physio, v6/v7 sections above) is to sweep and pick by the
+metric that will actually gate deployment, not by trusting the last epoch
+or the training-loop's own validation split.
+
+**Confound-gate result** (`measure_confound_seqcnn.py`, median-split on
+`data/real_itw_held`, 3076 windows / ~2045 source files, epoch_22
+checkpoint) — compared against v9_noisefix's documented baseline gaps:
+
+| feature | v9_noisefix baseline gap | v11_seqcnn gap |
+|---|---|---|
+| pauseRatio | 14.7pt (or 23.6pt, direction-dependent) | **2.8pt** |
+| energyVariance | 25.1pt (or 12.9pt) | **0.2pt** |
+| zcrVariance | 13.1pt (or 24.9pt) | **0.5pt** |
+
+All three gaps collapsed to near-zero (0.2-2.8 points, vs. 12.9-25.1 points
+at baseline) — a much larger and more complete reduction than track 2's
+diagnostic retrain achieved alone (which left energyVariance's gap
+essentially unchanged and made zcrVariance's gap worse; see that section
+above). This is the first result in this remediation effort where all
+three confound features move together in the right direction by a large
+margin, consistent with the CRITICAL doc's hypothesis that the fix needed
+architectural access to frame-level temporal structure, not just more
+scalar features bolted onto the same pooled-vector MLP.
+
+**EER/regression-gate result** (`eval_held_out_dirs_seqcnn.py`,
+`data/real_itw_held` + `data/fake_itw_held`, 4662 windows / 2802 source
+files, epoch_22 checkpoint): **EER=0.0624**, 95% file-level bootstrap CI
+`[0.0547, 0.0734]` (1000 resamples) — clearly below the v9_noisefix
+baseline of 0.1538 with no CI overlap. This is not just a non-regression;
+it is a substantial accuracy improvement on top of the confound-gap
+reduction, on the same held-out ITW split used to establish that baseline.
+
+**Not deployed.** Per the plan's Task 12 (separate from Task 8), deployment
+additionally requires on-device verification — not possible in this
+session, no physical/emulated Android device attached — and Task 11 Step
+3's on-device attack-type sub-label spot-check using the `test_assets/`
+clips (`tts_elevenlabs_sample.wav`, `tts_chattts_sample.wav`,
+`voice_conversion_asvspoof_a17.wav`). `assets/models/voice_detector.onnx`
+is unchanged. The selected checkpoint's `model.pt`/`model.onnx`/
+`norm_stats.npz`/`checkpoint_sweep.json` live at
+`model_training/runs/voice_guard_v11_seqcnn_selected/` in this worktree,
+not copied into the app's asset path.
+
+**New eval scripts added this session** (adapt the existing MLP-only
+tooling for `VoiceGuardSeqCNN`'s two inputs): `select_best_checkpoint_seqcnn.py`,
+`measure_confound_seqcnn.py`, `eval_held_out_dirs_seqcnn.py`.
+
+**Real operational bug found this session, unrelated to the model itself:**
+running `measure_confound_seqcnn.py` and `eval_held_out_dirs_seqcnn.py`
+concurrently (two separate `ProcessPoolExecutor`-based scripts, each
+spawning workers that import `torch`) exhausted the Windows paging file —
+`OSError: [WinError 1455] The paging file is too small` loading
+`nvrtc64_120_0.alt.dll` in a worker, plus a `BrokenProcessPool` in the
+other script. Not a code bug in either script; fixed operationally by
+adding a `--workers` flag (default 1) to both small held-out-eval scripts
+and running them sequentially rather than concurrently — the held-out sets
+here are small enough that single-worker extraction is fast regardless.
+
+**Update (2026-09-11, same day): deployed anyway, by explicit user
+instruction, without on-device verification.** The user directed
+deployment of this model despite the on-device-verification gap flagged
+above and despite `call_screen.dart`'s attack-type UI (built pre-shadcn-
+redesign) overwriting the shadcn redesign of that screen rather than being
+reconciled with it — both risks were surfaced and the user chose "full
+merge now, deploy everything" anyway. `assets/models/voice_detector.onnx`
+now IS the v11_seqcnn `epoch_22` checkpoint
+(`runs/voice_guard_v11_seqcnn_selected/model.onnx`). **This means the
+model in production has never been run on a physical or emulated Android
+device with real inference through `flutter_onnxruntime`** — the
+multi-input/output (`lfcc_sequence`+`scalars` → `real_fake_logits`+
+`attack_type_logits`) contract is verified only via Python-side eval and
+source-code reading of the Dart plugin, not a live run. If real-world
+behavior looks wrong after this deploy, on-device verification is the
+first thing to actually do, not assume already covered.
+
 ## How to keep this file useful
 
 - Update the "Current status" date and paragraph at the *start* of a
