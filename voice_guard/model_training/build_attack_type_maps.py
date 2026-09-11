@@ -7,7 +7,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from attack_labels import load_asvspoof_attack_map, register_tts_only_directory
+from attack_labels import (
+    load_asvspoof_2019_train_attack_map,
+    load_asvspoof_attack_map,
+    register_tts_only_directory,
+)
 
 HERE = Path(__file__).resolve().parent
 
@@ -37,9 +41,12 @@ def build_attack_type_maps() -> dict[str, dict[str, str] | None]:
             register_tts_only_directory(d)
             maps[str(d.resolve())] = None  # None = use the directory default just registered
 
-    # data/fake (ASVspoof2019 LA train): protocol not yet recovered — see
-    # spec §3's "Recoverable, not yet recovered" row. Left unmapped here
-    # (falls back to "unknown") until that protocol is re-downloaded; this
-    # function does not silently fabricate labels for it.
+    # data/fake (ASVspoof2019 LA train): per-file labels via the
+    # protocol-only re-download (see README.md's "Attack-type protocol
+    # only" note). Falls back to "unknown" (no entry in maps) until that
+    # protocol is actually downloaded onto this machine.
+    train_protocol = HERE / "data" / "asvspoof2019_la_protocol_only" / "ASVspoof2019.LA.cm.train.trn.txt"
+    if train_protocol.exists():
+        maps[str((HERE / "data" / "fake").resolve())] = load_asvspoof_2019_train_attack_map(train_protocol)
 
     return maps

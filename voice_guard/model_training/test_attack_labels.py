@@ -8,6 +8,7 @@ from pathlib import Path
 from attack_labels import (
     ATTACK_ID_TO_TYPE,
     attack_type_for_file,
+    load_asvspoof_2019_train_attack_map,
     load_asvspoof_attack_map,
 )
 
@@ -63,3 +64,16 @@ def test_build_attack_type_maps_finds_fake2021_if_protocol_present():
         assert len(maps[fake2021]) > 0
     else:
         assert fake2021 not in maps  # nothing to assert if the real corpus isn't present on this machine
+
+
+def test_load_asvspoof_2019_train_attack_map(tmp_path: Path):
+    protocol = tmp_path / "train.trn.txt"
+    protocol.write_text(
+        "LA_0079 LA_T_1234567 - A01 spoof\n"
+        "LA_0079 LA_T_7654321 - A17 spoof\n"
+        "LA_0079 LA_T_0000000 - - bonafide\n"
+    )
+    result = load_asvspoof_2019_train_attack_map(protocol)
+    assert result["LA_T_1234567"] == "tts"
+    assert result["LA_T_7654321"] == "vc"
+    assert "LA_T_0000000" not in result

@@ -101,7 +101,28 @@ was trained on:
 # 1. ASVspoof 2019 LA (train partition -> real/ fake/) — master plan §5.1
 kaggle datasets download -d anishsarkar22/asvpoof-2019-dataset-la -p data/extracted --unzip
 python data/split_flac_to_wav.py   # extracted/... -> data/real/, data/fake/
+```
 
+**Attack-type protocol only** (for track 4's TTS/VC labeling — does NOT
+need the multi-GB audio archive, `data/real`/`data/fake` are already
+extracted): re-download just the protocol file from the same Kaggle
+source used originally:
+
+```bash
+kaggle datasets download -d anishsarkar22/asvpoof-2019-dataset-la -p data/asvspoof2019_la_protocol_only --unzip -f "ASVspoof2019.LA.cm.train.trn.txt"
+```
+
+(If `-f` isn't supported by the installed `kaggle` CLI version, download
+the full dataset to a throwaway directory and delete everything except
+the protocol file afterward — it's a few hundred KB, the audio is
+multiple GB; do not leave the audio archive on disk.)
+
+The train protocol's column layout differs slightly from
+`trial_metadata.txt` (columns: `speaker_id utt_id - attack_id key`, no
+codec/tx/trim/subset columns) — `attack_labels.py::load_asvspoof_2019_train_attack_map`
+handles this format; `load_asvspoof_attack_map` handles the 2021 format.
+
+```bash
 # 2. ASVspoof 2021 LA eval + bundled 2019 LA dev (-> real2021/ fake2021/)
 #    already telephony-degraded by construction (real codec roundtrips),
 #    so these are NOT run through --channel in training.

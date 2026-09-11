@@ -59,6 +59,24 @@ def load_asvspoof_attack_map(protocol_path: Path) -> dict[str, str]:
     return result
 
 
+def load_asvspoof_2019_train_attack_map(protocol_path: Path) -> dict[str, str]:
+    """Parses the ASVspoof2019 LA train protocol format (columns:
+    speaker_id utt_id - attack_id key — no codec/tx/trim/subset columns,
+    unlike the 2021 trial_metadata.txt format load_asvspoof_attack_map
+    handles) into {utt_id: "tts"|"vc"}."""
+    result: dict[str, str] = {}
+    with open(protocol_path) as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            utt_id, attack_id, key = parts[1], parts[3], parts[4]
+            if key != "spoof" or attack_id not in ATTACK_ID_TO_TYPE:
+                continue
+            result[utt_id] = ATTACK_ID_TO_TYPE[attack_id]
+    return result
+
+
 def attack_type_for_file(
     wav_path: Path, source_dir: str, per_file_map: dict[str, str] | None
 ) -> str:
