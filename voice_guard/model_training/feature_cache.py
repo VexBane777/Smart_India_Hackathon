@@ -54,7 +54,11 @@ from dataset import (
 from eval_protocol import channel_name
 from features import N_LFCC
 
-CACHE_FORMAT_VERSION = 1
+CACHE_FORMAT_VERSION = 2  # v1 hashed unit contents without the per-file pad policy;
+# convert_prob/keep_short_prob change which windows a file yields but were
+# not in unit_key, so a pad-policy change silently reused stale units. v2
+# hashes (convert_prob, keep_short_prob) per file. Bumped 2026-09-12 when
+# the training pad-policy pre-pass was parallelized (corpus.py).
 N_FRAMES = 184
 N_SCALARS = 6
 SEQ_DTYPE = np.float16
@@ -126,7 +130,7 @@ def feature_version() -> dict:
 
 def unit_key(specs: list[FileSpec], recipe: str | None, seed: int) -> str:
     h = hashlib.sha256()
-    h.update(f"{channel_name(recipe)}|{seed}".encode())
+    h.update(f"{channel_name(recipe)}|{seed}|{CACHE_FORMAT_VERSION}".encode())
     for s in sorted(specs, key=lambda s: s.file_id):
         h.update(f"|{s.file_id}:{s.label}:{s.attack_type}:{s.attack_id}:{s.convert_prob:.6f}:{s.keep_short_prob:.6f}:{s.source_set}".encode())
     return h.hexdigest()[:12]

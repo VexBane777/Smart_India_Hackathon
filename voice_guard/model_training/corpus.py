@@ -150,8 +150,7 @@ def train_phone_channel_from(file_id: str, phone_channels: tuple[str, ...], seed
 
 def training_units(
     specs_by_set: dict[str, list[FileSpec]], seed: int = 0,
-    channels: tuple[str | None, ...] | None = None,
-) -> list[tuple[str, list[FileSpec], str | None]]:
+    channels: tuple[str | None, ...] | None = None) -> list[tuple[str, list[FileSpec], str | None]]:
     """(unit name, specs, recipe) for every training rendition: each set
     once with `none` (if in `channels`), and each file once more through ONE
     phone channel from `channels` chosen by file hash. Default channels:

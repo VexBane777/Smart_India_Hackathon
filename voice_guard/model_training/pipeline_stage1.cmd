@@ -22,7 +22,7 @@ if errorlevel 1 (
 )
 
 echo [%DATE% %TIME%] build_caches --eval >> "%LOG%"
-"%PY%" build_caches.py --eval --cache-root "%CACHE%" >> "%LOG%" 2>&1
+"%PY%" build_caches.py --eval --rebuild-stale --cache-root "%CACHE%" >> "%LOG%" 2>&1
 echo [%DATE% %TIME%] eval caches exit %ERRORLEVEL% >> "%LOG%"
 if errorlevel 1 exit /b 1
 
