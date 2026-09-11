@@ -88,7 +88,6 @@ windowing, the feature cache, the metrics/deploy gates, and the one eval
 harness (`evaluate.py`). The code enforces it (`eval_protocol.py` +
 `test_eval_protocol.py`); if you change the protocol, change doc, code and
 tests together.
-device.
 
 ## Open / unresolved — Module A "final scoped re-review"
 

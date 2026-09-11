@@ -22,9 +22,12 @@ detected - starting training` → `stage 2 complete` → stage-3 lines.
 3. Stage 3 done (`stage 3 complete - see runs/eval_v12_test/report.md`):
    read `runs/eval_v12_test/report.md` + `report.json`. Decision rule:
    ship v12 to `assets/models/voice_detector.onnx` ONLY if it passes confound
-   gates (|rho| <= 0.10 per confound feature pooled over phone channels,
-   worse/better half error-rate ratio <= 1.25) AND beats v11 on `test` under
-   the channel protocol. Attack-type head below 0.70 balanced accuracy on
+   gates as implemented in evaluate.py / EVAL-PROTOCOL.md §6 (|rho| <= 0.10
+   per confound feature pooled over phone channels; a rate row fails only if
+   worse/better half error-rate ratio > 1.25 AND |diff| > 1pt AND the
+   file-level bootstrap CI excludes 0, Bonferroni-corrected) AND beats v11 on
+   `test` under the channel protocol. The report's decision section applies
+   this rule; read it, don't recompute it. Attack-type head below 0.70 balanced accuracy on
    leave-attack-out → recommend hiding the UI sub-label; coordinate the
    `call_screen.dart` change with the UI session, don't touch UI code alone.
    Then: state.md section, commit, merge to `vaani`, push, message UI session.

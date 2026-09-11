@@ -322,8 +322,10 @@ def write_markdown(report: dict, path: Path) -> None:
         L.append(f"| {s} ({'FPR' if v['label'] == 0 else 'FNR'}) | {v['n_windows']} | "
                  + " | ".join(_fmt(M[n]["per_set"][s][key], True) for n in names) + " |")
     L += ["", "## Confound v2 (phone-pooled, core sets)", "",
-          f"Gates: |rho| <= {RHO_GATE}; worse/better half rate ratio <= {RATE_RATIO_GATE} "
-          f"(or |diff| <= {RATE_ABS_FLOOR:.0%}). Rate = FPR for reals, FNR for fakes, at the select threshold.", ""]
+          f"Gates: |rho| <= {RHO_GATE}; a rate row fails only if worse/better half rate ratio > {RATE_RATIO_GATE} "
+          f"AND |diff| > {RATE_ABS_FLOOR:.0%} AND the file-level bootstrap CI of the difference excludes 0 "
+          f"(Bonferroni alpha 0.05 over {2 * len(CONFOUND_FEATURES)} rows). "
+          "Rate = FPR for reals, FNR for fakes, at the select threshold.", ""]
     for n in names:
         cf = M[n]["confound"]["phone_pooled"]
         L += [f"### {n}: {'PASS' if cf['passed'] else 'FAIL ' + ', '.join(cf['failed'])}", "",
