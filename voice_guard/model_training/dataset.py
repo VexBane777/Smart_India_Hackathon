@@ -26,7 +26,8 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from features import SAMPLE_RATE, chunk_audio, extract_features
+from attack_labels import attack_type_for_file
+from features import SAMPLE_RATE, chunk_audio, extract_lfcc_sequence, extract_scalars
 
 VAANI_ROOT = Path(__file__).resolve().parents[2] / "vaani"
 if str(VAANI_ROOT) not in sys.path:
@@ -36,10 +37,16 @@ if str(VAANI_ROOT) not in sys.path:
     sys.path.append(str(VAANI_ROOT))
 
 
+ATTACK_TYPE_TO_INT = {"tts": 0, "vc": 1}  # "unknown" and real both map to IGNORE_ATTACK_TYPE
+IGNORE_ATTACK_TYPE = -100  # PyTorch CrossEntropyLoss's default ignore_index
+
+
 @dataclass
 class Example:
-    features: np.ndarray
+    lfcc_seq: np.ndarray  # (n_frames, 60), unpooled
+    scalars: np.ndarray  # (6,) = 3 prosody + 3 physio
     label: int
+    attack_type: int  # ATTACK_TYPE_TO_INT value, or IGNORE_ATTACK_TYPE
     source_file: str
     source_dir: str  # which --real/--fake/--real-clean/--fake-clean dir this came from
 
@@ -109,9 +116,15 @@ def _maybe_channel(
 
 
 def _process_file(
-    args: tuple[Path, int, str, list[str | None], np.random.SeedSequence],
+    args: tuple[Path, int, str, list[str | None], np.random.SeedSequence, int],
 ) -> list[Example]:
-    wav_path, label, source_dir, channel_recipes, seed_seq = args
+    # attack_type is resolved in build_examples (parent process), not here:
+    # ProcessPoolExecutor uses spawn on Windows, so a worker subprocess never
+    # sees attack_labels.DIRECTORY_DEFAULT_ATTACK_TYPE mutations made in the
+    # parent after the pool starts — same class of issue this module's RNG
+    # handling already works around. Resolving up front sidesteps it rather
+    # than relying on cross-process global state.
+    wav_path, label, source_dir, channel_recipes, seed_seq, attack_type = args
     rng = np.random.default_rng(seed_seq)
     pcm = _load_mono_16k(wav_path)
     pcm = trim_edge_silence(pcm, rng=rng)
@@ -121,8 +134,10 @@ def _process_file(
         for chunk in chunk_audio(degraded):
             out.append(
                 Example(
-                    features=extract_features(chunk),
+                    lfcc_seq=extract_lfcc_sequence(chunk),
+                    scalars=extract_scalars(chunk),
                     label=label,
+                    attack_type=attack_type,
                     # Full resolved path, not wav_path.name: several corpora sourced
                     # into this pipeline use sequentially-numbered filenames
                     # (1.wav, 10005.wav, ...) that collide across directories.
@@ -146,6 +161,7 @@ def build_examples(
     channel_recipes: list[str | None] = (None,),
     workers: int | None = None,
     seed: int = 0,
+    attack_type_maps: dict[str, dict[str, str] | None] | None = None,
 ) -> list[Example]:
     """Extracts (features, label) examples from one or more real/fake WAV
     dirs, optionally degraded through each channel recipe.
@@ -157,16 +173,28 @@ def build_examples(
     from the single top-level seed) so degradation stays reproducible and
     independent per file even though workers run as separate processes —
     a single shared np.random.Generator can't be meaningfully advanced
-    across a process pool the way it can in-process."""
-    tasks: list[tuple[Path, int, str, list[str | None]]] = []
+    across a process pool the way it can in-process.
+
+    attack_type_maps: optional {resolved_source_dir: per_file_map_or_None}
+    — see attack_labels.attack_type_for_file. Directories absent from this
+    dict fall back to the directory-level default / "unknown", same as
+    passing an explicit None entry."""
+    attack_type_maps = attack_type_maps or {}
+    tasks: list[tuple[Path, int, str, list[str | None], int]] = []
     for label, dirs in ((0, real_dir), (1, fake_dir)):
         for directory in _as_dir_list(dirs):
             source_dir = str(Path(directory).resolve())
+            per_file_map = attack_type_maps.get(source_dir)
             for wav_path in sorted(Path(directory).glob("*.wav")):
-                tasks.append((wav_path, label, source_dir, list(channel_recipes)))
+                if label == 1:
+                    attack_type_str = attack_type_for_file(wav_path, source_dir, per_file_map)
+                    attack_type = ATTACK_TYPE_TO_INT.get(attack_type_str, IGNORE_ATTACK_TYPE)
+                else:
+                    attack_type = IGNORE_ATTACK_TYPE  # real examples are never attack-typed
+                tasks.append((wav_path, label, source_dir, list(channel_recipes), attack_type))
 
     seed_seqs = np.random.SeedSequence(seed).spawn(len(tasks))
-    tasks = [(*t, ss) for t, ss in zip(tasks, seed_seqs)]
+    tasks = [(t[0], t[1], t[2], t[3], ss, t[4]) for t, ss in zip(tasks, seed_seqs)]
 
     workers = workers or os.cpu_count() or 1
     examples: list[Example] = []
@@ -237,7 +265,9 @@ def split_by_source(
     return train, val
 
 
-def to_arrays(examples: list[Example]) -> tuple[np.ndarray, np.ndarray]:
-    X = np.stack([e.features for e in examples]).astype(np.float32)
+def to_arrays(examples: list[Example]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    X_seq = np.stack([e.lfcc_seq for e in examples]).astype(np.float32)
+    X_scalars = np.stack([e.scalars for e in examples]).astype(np.float32)
     y = np.array([e.label for e in examples], dtype=np.int64)
-    return X, y
+    attack_y = np.array([e.attack_type for e in examples], dtype=np.int64)
+    return X_seq, X_scalars, y, attack_y

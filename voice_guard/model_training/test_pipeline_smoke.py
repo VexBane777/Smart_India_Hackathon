@@ -19,11 +19,9 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-import torch
 
-from features import SAMPLE_RATE, extract_features
+from features import N_LFCC, SAMPLE_RATE, extract_features
 from dataset import build_examples, split_by_source, to_arrays
-from model import VoiceGuardMLP
 
 
 def _write_synthetic_corpus(root: Path, n_per_class: int = 6, seconds: float = 4.0):
@@ -53,7 +51,13 @@ def test_feature_extraction_shape():
     assert feats.dtype == np.float32
 
 
-def test_end_to_end_train_and_export(tmp_path: Path = None):
+def test_build_examples_and_to_arrays_produce_sequence_shaped_dataset(tmp_path: Path = None):
+    """Dataset-pipeline mechanics only (build_examples -> split_by_source ->
+    to_arrays), using the same synthetic corpus this file has always used.
+    The full model+ONNX-export exercise for the sequence-CNN pipeline lives
+    in test_train_seq_cnn.py's own end-to-end smoke test (added alongside
+    VoiceGuardSeqCNN) — VoiceGuardMLP no longer consumes this shape, so it
+    doesn't belong in this test anymore."""
     tmp_path = tmp_path or Path(tempfile.mkdtemp())
     real_dir, fake_dir = _write_synthetic_corpus(tmp_path)
 
@@ -63,29 +67,15 @@ def test_end_to_end_train_and_export(tmp_path: Path = None):
     assert train_ex and val_ex
     assert {e.source_file for e in train_ex} & {e.source_file for e in val_ex} == set()
 
-    X_train, y_train = to_arrays(train_ex)
-    assert X_train.shape[1] == 66
+    X_seq, X_scalars, y_train, attack_y = to_arrays(train_ex)
+    assert X_seq.shape[0] == len(train_ex)
+    assert X_seq.shape[2] == N_LFCC
+    assert X_scalars.shape == (len(train_ex), 6)
     assert set(y_train.tolist()) <= {0, 1}
-
-    mean, std = X_train.mean(axis=0), X_train.std(axis=0) + 1e-8
-    model = VoiceGuardMLP(norm_mean=mean, norm_std=std)
-    logits = model(torch.from_numpy(X_train))
-    assert logits.shape == (len(X_train), 2)
-
-    onnx_path = tmp_path / "model.onnx"
-    torch.onnx.export(
-        model,
-        torch.from_numpy(X_train[:1]),
-        str(onnx_path),
-        input_names=["features"],
-        output_names=["logits"],
-        opset_version=13,
-        dynamo=False,
-    )
-    assert onnx_path.exists() and onnx_path.stat().st_size > 0
+    assert attack_y.shape == (len(train_ex),)
 
 
 if __name__ == "__main__":
     test_feature_extraction_shape()
-    test_end_to_end_train_and_export()
+    test_build_examples_and_to_arrays_produce_sequence_shaped_dataset()
     print("Smoke test passed.")
