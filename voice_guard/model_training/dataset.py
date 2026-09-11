@@ -272,6 +272,18 @@ def estimate_windows(duration: float) -> tuple[int, int]:
     return 0, n + (1 if rem >= TAIL_MIN_SECONDS else 0)
 
 
+def estimate_duration_seconds(path: Path) -> float:
+    """Clip duration from the file header only — no audio decode. Used by
+    the training pad-policy pre-pass (compute_pad_policy needs raw durations
+    for the whole corpus; decoding ~100k files just to time them took the
+    v12 train-cache build over the edge). Trim-edge effects are tiny
+    relative to a 1–3 s policy decision."""
+    try:
+        return float(sf.info(str(path)).duration)
+    except Exception:
+        return 0.0
+
+
 def compute_pad_policy(durations: list[float], target: float = PAD_TARGET_FRACTION) -> tuple[float, float, float]:
     """(convert_prob, keep_short_prob, natural_padded_fraction) moving one
     source set's padded-window share to `target`, from clip durations."""

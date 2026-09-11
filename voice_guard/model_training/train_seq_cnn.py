@@ -108,7 +108,7 @@ def build_training_collection(args, channels):
     else:
         sets = TRAIN_SETS_V12
     specs_by_set = training_specs(sets, attack_type_maps=maps, balance_pad=not args.no_pad_balance,
-                                  duration_cache=args.cache_root / "train_durations.json")
+                                  duration_cache=args.cache_root / "train_durations.json", workers=args.workers)
     units = training_units(specs_by_set, args.seed, tuple(channels))
     dirs = []
     with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:

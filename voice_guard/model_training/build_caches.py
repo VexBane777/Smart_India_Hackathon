@@ -35,9 +35,9 @@ def eval_units(split: str, channels, set_names=None, attack_type_maps=None):
     return [(f"eval_{split}_{name}", specs, ch) for name, specs in specs_by_set.items() for ch in channels]
 
 
-def train_units_for(cache_root: Path, seed: int = 0, attack_type_maps=None):
+def train_units_for(cache_root: Path, seed: int = 0, attack_type_maps=None, workers: int = 10):
     specs_by_set = training_specs(attack_type_maps=attack_type_maps,
-                                  duration_cache=cache_root / "train_durations.json")
+                                  duration_cache=cache_root / "train_durations.json", workers=workers)
     return training_units(specs_by_set, seed)
 
 
@@ -77,7 +77,7 @@ def main() -> None:
         for split in args.splits:
             units += eval_units(split, channels, args.eval_sets, maps)
     if args.train:
-        units += train_units_for(cache_root, args.seed, maps)
+        units += train_units_for(cache_root, args.seed, maps, args.workers)
     n_files = sum(len(s) for _n, s, _c in units)
     print(f"[build] {len(units)} units, {n_files} file-renditions -> {cache_root}", file=sys.stderr, flush=True)
     todo = [u for u in units if not (unit_dir(cache_root, u[0], u[1], u[2], args.seed) / "manifest.json").exists()]

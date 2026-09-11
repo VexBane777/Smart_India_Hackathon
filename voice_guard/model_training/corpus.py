@@ -89,17 +89,38 @@ def train_phone_channel(file_id: str, seed: int = 0) -> str:
     return train_phone_channel_from(file_id, TRAIN_PHONE_CHANNELS, seed)
 
 
+# Backwards-compat alias: estimate_duration_seconds used to live here as the
+# private _raw_duration. dataset's copy is now the canonical one.
 def _raw_duration(path: str) -> float:
-    try:
-        info = sf.info(path)
-        return info.frames / info.samplerate
-    except Exception:
-        return 0.0
+    from dataset import estimate_duration_seconds
+
+    return estimate_duration_seconds(Path(path))
+
+
+def _durations_for(specs: list, durations: dict, workers: int = 10) -> dict:
+    """Header-only duration reads for specs missing from `durations`, in a
+    process pool (this corpus's ~120k files take minutes single-threaded;
+    only the missing ones are read). Returns the updated dict."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    from dataset import estimate_duration_seconds
+
+    missing = [s for s in specs if s.file_id not in durations]
+    if not missing:
+        return durations
+    if workers <= 1 or len(missing) < 2:
+        for s in missing:
+            durations[s.file_id] = estimate_duration_seconds(Path(s.path))
+        return durations
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        for s, d in zip(missing, pool.map(estimate_duration_seconds, (Path(s.path) for s in missing), chunksize=256)):
+            durations[s.file_id] = d
+    return durations
 
 
 def training_specs(
     sets: tuple[SetDef, ...] = TRAIN_SETS_V12, attack_type_maps=None, balance_pad: bool = True,
-    duration_cache: Path | None = None,
+    duration_cache: Path | None = None, workers: int = 10,
 ) -> dict[str, list[FileSpec]]:
     """{set name: specs}, with per-set pad-balancing probabilities filled in.
     Durations (header reads) are cached in `duration_cache` (json) if given."""
@@ -111,9 +132,7 @@ def training_specs(
         specs = make_file_specs(sd.path, sd.label, sd.name, attack_type_maps,
                                 default_attack_type=sd.default_attack_type, cap=sd.cap, recursive=sd.recursive)
         if balance_pad:
-            for s in specs:
-                if s.file_id not in durations:
-                    durations[s.file_id] = _raw_duration(s.path)
+            durations = _durations_for(specs, durations, workers)
             conv, keep, frac = compute_pad_policy([durations[s.file_id] for s in specs])
             print(f"[corpus] {sd.name}: {len(specs)} files, natural padded-window share ~{frac:.2f} -> "
                   f"convert_prob={conv:.3f} keep_short_prob={keep:.3f}")
