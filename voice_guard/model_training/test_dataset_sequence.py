@@ -37,6 +37,11 @@ def test_build_examples_populates_sequence_scalars_and_attack_type(tmp_path):
     assert real_ex.scalars.shape == (6,)
     assert real_ex.attack_type == -100  # real examples are never attack-typed
 
+    # float32, not extract_lfcc_sequence's native float64 — memory measured
+    # on a real full-corpus run, see dataset.py's _process_file comment.
+    assert real_ex.lfcc_seq.dtype == np.float32
+    assert real_ex.scalars.dtype == np.float32
+
     assert fake_ex.attack_type == 0  # "tts", via the registered directory default
 
 

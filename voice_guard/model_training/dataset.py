@@ -134,8 +134,16 @@ def _process_file(
         for chunk in chunk_audio(degraded):
             out.append(
                 Example(
-                    lfcc_seq=extract_lfcc_sequence(chunk),
-                    scalars=extract_scalars(chunk),
+                    # float32, not extract_lfcc_sequence's native float64: a
+                    # sequence Example is ~167x larger than track 2's flat
+                    # 66-float vector (184x60 vs 66), so accumulating tens of
+                    # thousands of them in float64 during extraction — before
+                    # to_arrays' own eventual .astype(np.float32) even runs —
+                    # was measured to double peak RAM on a real full-corpus
+                    # run and made the process unviable on a 16GB machine.
+                    # Downcast immediately instead of deferring to to_arrays.
+                    lfcc_seq=extract_lfcc_sequence(chunk).astype(np.float32),
+                    scalars=extract_scalars(chunk).astype(np.float32),
                     label=label,
                     attack_type=attack_type,
                     # Full resolved path, not wav_path.name: several corpora sourced
