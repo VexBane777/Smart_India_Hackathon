@@ -37,8 +37,10 @@ def main() -> None:
     ap.add_argument("--n-bootstrap", type=int, default=1000)
     args = ap.parse_args()
 
-    model = VoiceGuardMLP(hidden_dims=tuple(args.hidden_dims))
-    model.load_state_dict(torch.load(args.model, map_location="cpu", weights_only=True))
+    state = torch.load(args.model, map_location="cpu", weights_only=True)
+    input_dim = state["normalize.mean"].shape[0]  # derive from checkpoint, not the current INPUT_DIM constant
+    model = VoiceGuardMLP(input_dim=input_dim, hidden_dims=tuple(args.hidden_dims))
+    model.load_state_dict(state)
     model.eval()
 
     examples = build_examples(args.real, args.fake, channel_recipes=[None])
