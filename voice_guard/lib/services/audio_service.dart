@@ -35,10 +35,16 @@ class AudioService {
   final _pcmCtrl = StreamController<List<double>>.broadcast();
   final _rmsCtrl = StreamController<double>.broadcast();
   final _signalCtrl = StreamController<bool>.broadcast();
+  final _attackTypeCtrl = StreamController<(String?, double)>.broadcast();
 
   Stream<double> get scoreStream => _scoreCtrl.stream;
   Stream<List<double>> get pcmStream => _pcmCtrl.stream;
   Stream<double> get rmsStream => _rmsCtrl.stream;
+  /// (attackType, confidence) alongside scoreStream — attackType is 'tts',
+  /// 'vc', or null (heuristic fallback / no ONNX session loaded). UI layers
+  /// decide their own confidence-gating threshold (see call_screen.dart);
+  /// this stream reports the raw model output, unfiltered.
+  Stream<(String?, double)> get attackTypeStream => _attackTypeCtrl.stream;
   /// Whether the most recently *scored* window carried real signal, as
   /// opposed to silence/OS zero-filled reads (see AudioCaptureManager's
   /// docstring — some OEM builds zero-fill AudioRecord reads once the real
@@ -104,8 +110,9 @@ class AudioService {
       }
       _signalCtrl.add(true);
 
-      final score = await tflite.scoreChunk(chunk);
+      final (score, attackType, attackConfidence) = await tflite.scoreChunk(chunk);
       _scoreCtrl.add(score);
+      _attackTypeCtrl.add((attackType, attackConfidence));
     });
   }
 
@@ -157,8 +164,9 @@ class AudioService {
             0.05 * (math.Random(i).nextDouble() - 0.5));
       }
     });
-    final score = await tflite.scoreChunk(chunk);
+    final (score, attackType, attackConfidence) = await tflite.scoreChunk(chunk);
     _scoreCtrl.add(score);
+    _attackTypeCtrl.add((attackType, attackConfidence));
     final wave = chunk.take(28).toList();
     _pcmCtrl.add(wave);
     _rmsCtrl.add(isAiVoice ? 0.35 : 0.25);
@@ -170,6 +178,7 @@ class AudioService {
     _pcmCtrl.close();
     _rmsCtrl.close();
     _signalCtrl.close();
+    _attackTypeCtrl.close();
   }
 }
 
