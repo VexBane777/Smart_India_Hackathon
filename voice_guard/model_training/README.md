@@ -54,14 +54,19 @@ and `data/prep_in_the_wild.py`.
   different training mix and shouldn't be assumed to reproduce them exactly.
 
 **Feature contract (must not drift):** `features.py` is a numpy port of
-`lib/utils/audio_processor.dart`'s `extractLfcc`/`extractProsody` — 60 LFCC
-(mean-pooled over 1024-pt/256-hop frames) + 3 prosody scalars
-(`[pauseRatio, energyVariance, zcrVariance]`), 63 floats total, in that
-concatenation order. `tflite_io.dart`'s `TFLiteService.infer` sends exactly
-this vector and expects a `(1, 2)` raw-logit output (it applies softmax
-itself). If you change frame size / hop / feature order on either side,
-change it on both — a Python-trained model is only as good as its parity
-with what the phone actually computes at inference time.
+`lib/utils/audio_processor.dart`'s `extractLfcc`/`extractProsody`/
+`extractPhysio` — 60 LFCC (mean-pooled over 1024-pt/256-hop frames) + 3
+prosody scalars (`[pauseRatio, energyVariance, zcrVariance]`) + 3
+physiological voice-quality scalars (`[jitter_local, shimmer_local,
+hnr_db]`, added for the entity-vs-style confound remediation, see
+`docs/CRITICAL-entity-vs-style-confound.md` §4 item 2 and
+`docs/superpowers/plans/2026-09-11-physiological-features-plan.md`), 66
+floats total, in that concatenation order. `tflite_io.dart`'s
+`TFLiteService.infer` sends exactly this vector and expects a `(1, 2)`
+raw-logit output (it applies softmax itself). If you change frame size /
+hop / feature order on either side, change it on both — a Python-trained
+model is only as good as its parity with what the phone actually computes
+at inference time.
 
 Normalization (mean/std) is baked into the exported model itself
 (`model.py::FixedNormalize`), not applied separately — there's no
@@ -74,7 +79,7 @@ inside the graph.
 dataset.py   — real/ + fake/ WAV dirs -> (features, label) examples,
                 split at the SOURCE FILE level (no chunk leakage),
                 optional TeleChannel degradation (--channel whatsapp ...)
-model.py     — VoiceGuardMLP: FixedNormalize -> 63->64->32->2 MLP
+model.py     — VoiceGuardMLP: FixedNormalize -> 66->64->32->2 MLP
 train.py     — trains, reports EER per epoch, exports model.onnx
 export_tflite.py — model.onnx -> voice_detector.tflite (needs tensorflow +
                 onnx2tf — NOT installed on the CPU dev laptop this was

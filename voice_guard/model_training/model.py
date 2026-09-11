@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from torch import nn
 
-INPUT_DIM = 63  # 60 LFCC + 3 prosody, must match audio_processor.dart exactly
+INPUT_DIM = 66  # 60 LFCC + 3 prosody + 3 physio (jitter/shimmer/HNR), must match audio_processor.dart exactly
 NUM_CLASSES = 2  # 0 = real, 1 = synthetic/cloned
 
 
@@ -23,6 +23,7 @@ class FixedNormalize(nn.Module):
 
     def __init__(self, mean: np.ndarray, std: np.ndarray):
         super().__init__()
+        assert mean.shape == std.shape, f"mean/std shape mismatch: {mean.shape} vs {std.shape}"
         self.register_buffer("mean", torch.from_numpy(mean.astype(np.float32)))
         self.register_buffer("std", torch.from_numpy(std.astype(np.float32)))
 
@@ -43,6 +44,11 @@ class VoiceGuardMLP(nn.Module):
         self.normalize = FixedNormalize(
             norm_mean if norm_mean is not None else np.zeros(input_dim),
             norm_std if norm_std is not None else np.ones(input_dim),
+        )
+        actual_dim = self.normalize.mean.shape[0]
+        assert actual_dim == input_dim, (
+            f"input_dim={input_dim} but norm_mean/norm_std have {actual_dim} entries — "
+            "train.py must pass input_dim= explicitly if features.py's output width changes"
         )
         dims = (input_dim, *hidden_dims)
         layers: list[nn.Module] = []

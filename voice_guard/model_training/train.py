@@ -157,7 +157,9 @@ def main() -> None:
         shuffle=True,
     )
 
-    model = VoiceGuardMLP(norm_mean=mean, norm_std=std, hidden_dims=tuple(args.hidden_dims)).to(device)
+    model = VoiceGuardMLP(
+        input_dim=X_train.shape[1], norm_mean=mean, norm_std=std, hidden_dims=tuple(args.hidden_dims)
+    ).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     loss_fn = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     X_val_t = torch.from_numpy(X_val).to(device)
@@ -194,7 +196,7 @@ def main() -> None:
 
     # Raw (unnormalized) dummy input — normalization is baked into the model
     # itself (FixedNormalize), matching exactly what tflite_io.dart sends.
-    dummy = torch.from_numpy(X_val[:1]) if len(X_val) else torch.zeros(1, 63)
+    dummy = torch.from_numpy(X_val[:1]) if len(X_val) else torch.zeros(1, X_train.shape[1])
     torch.onnx.export(
         model,
         dummy,

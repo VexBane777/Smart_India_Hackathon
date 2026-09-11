@@ -58,7 +58,7 @@ def main() -> None:
 
     results = []
     for ckpt_path in checkpoints:
-        model = VoiceGuardMLP(hidden_dims=tuple(args.hidden_dims))
+        model = VoiceGuardMLP(input_dim=X.shape[1], hidden_dims=tuple(args.hidden_dims))
         model.load_state_dict(torch.load(ckpt_path, map_location="cpu", weights_only=True))
         model.eval()
         with torch.no_grad():
@@ -77,7 +77,7 @@ def main() -> None:
     model = VoiceGuardMLP(hidden_dims=tuple(args.hidden_dims))
     model.load_state_dict(best_state)
     model.eval()
-    dummy = torch.zeros(1, 63)
+    dummy = torch.zeros(1, X.shape[1])
     torch.onnx.export(
         model, dummy, str(args.out / "model.onnx"),
         input_names=["features"], output_names=["logits"],
