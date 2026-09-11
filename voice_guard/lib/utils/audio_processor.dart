@@ -169,6 +169,95 @@ class AudioProcessor {
     return out;
   }
 
+  // --- Physiological voice-quality features (remediation track 2) ---
+  static const int _pitchFrameLen = 480; // 30ms @ 16kHz
+  static const int _pitchHop = 160; // 10ms @ 16kHz
+  static const double _minF0 = 75.0;
+  static const double _maxF0 = 500.0;
+  static final int _minLag = (sampleRate / _maxF0).round(); // 32
+  static final int _maxLag = (sampleRate / _minF0).round(); // 213
+  static const double _voicingThreshold = 0.30;
+
+  /// [periods(s), amplitudes, autocorrPeaks, voicedMask] — one entry per
+  /// frame, mirrors features.py::_pitch_track exactly.
+  static (List<double>, List<double>, List<double>, List<bool>) _pitchTrack(List<double> pcm) {
+    final n = pcm.length;
+    if (n < _pitchFrameLen) return (const [], const [], const [], const []);
+    final nFrames = 1 + (n - _pitchFrameLen) ~/ _pitchHop;
+    final periods = List<double>.filled(nFrames, 0);
+    final amps = List<double>.filled(nFrames, 0);
+    final peaks = List<double>.filled(nFrames, 0);
+    final voiced = List<bool>.filled(nFrames, false);
+    for (int i = 0; i < nFrames; i++) {
+      final start = i * _pitchHop;
+      final frame = pcm.sublist(start, start + _pitchFrameLen);
+      double sumSq = 0;
+      for (final v in frame) { sumSq += v * v; }
+      amps[i] = math.sqrt(sumSq / _pitchFrameLen);
+      if (sumSq <= 1e-12) continue;
+      int bestLag = 0;
+      double bestR = 0.0;
+      final maxLagForFrame = math.min(_maxLag, _pitchFrameLen - 1);
+      for (int lag = _minLag; lag <= maxLagForFrame; lag++) {
+        double dotAB = 0, dotAA = 0, dotBB = 0;
+        for (int k = 0; k < _pitchFrameLen - lag; k++) {
+          final a = frame[k], b = frame[k + lag];
+          dotAB += a * b; dotAA += a * a; dotBB += b * b;
+        }
+        final denom = math.sqrt(dotAA * dotBB);
+        if (denom <= 1e-12) continue;
+        final r = dotAB / denom;
+        if (r > bestR) { bestR = r; bestLag = lag; }
+      }
+      peaks[i] = bestR;
+      if (bestR >= _voicingThreshold && bestLag > 0) {
+        voiced[i] = true;
+        periods[i] = bestLag / sampleRate;
+      }
+    }
+    return (periods, amps, peaks, voiced);
+  }
+
+  /// 3s PCM buffer -> [jitterLocal, shimmerLocal, hnrDb]. Mirrors
+  /// features.py::extract_physio exactly — see that function's docstring
+  /// for the algorithm and its deliberate simplifications.
+  static List<double> extractPhysio(List<double> pcm) {
+    final (periods, amps, peaks, voiced) = _pitchTrack(pcm);
+    final voicedCount = voiced.where((v) => v).length;
+    if (voicedCount < 2) return [0, 0, 0];
+
+    final pairIdx = <int>[];
+    for (int i = 0; i < voiced.length - 1; i++) {
+      if (voiced[i] && voiced[i + 1]) pairIdx.add(i);
+    }
+    if (pairIdx.isEmpty) return [0, 0, 0];
+
+    double sumAbsPeriodDiff = 0, sumMeanPeriod = 0;
+    double sumAbsAmpDiff = 0, sumMeanAmp = 0;
+    for (final i in pairIdx) {
+      final p0 = periods[i], p1 = periods[i + 1];
+      sumAbsPeriodDiff += (p1 - p0).abs();
+      sumMeanPeriod += (p0 + p1) / 2;
+      final a0 = amps[i], a1 = amps[i + 1];
+      sumAbsAmpDiff += (a1 - a0).abs();
+      sumMeanAmp += (a0 + a1) / 2;
+    }
+    final meanPeriod = sumMeanPeriod / pairIdx.length;
+    final meanAmp = sumMeanAmp / pairIdx.length;
+    final jitterLocal = meanPeriod > 1e-12 ? (sumAbsPeriodDiff / pairIdx.length) / meanPeriod : 0.0;
+    final shimmerLocal = meanAmp > 1e-12 ? (sumAbsAmpDiff / pairIdx.length) / meanAmp : 0.0;
+
+    double sumHnr = 0;
+    for (int i = 0; i < voiced.length; i++) {
+      if (!voiced[i]) continue;
+      final r = peaks[i].clamp(0.0, 0.999999);
+      sumHnr += 10 * math.log(r / (1 - r) + 1e-12) / math.ln10;
+    }
+    final hnrDb = sumHnr / voicedCount;
+
+    return [jitterLocal, shimmerLocal, hnrDb];
+  }
+
   /// Convert PCM16 bytes (little-endian) → normalized double [-1, 1].
   static List<double> pcm16ToDouble(List<int> bytes) {
     final out = <double>[];

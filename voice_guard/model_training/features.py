@@ -95,12 +95,102 @@ def extract_prosody(pcm: np.ndarray) -> np.ndarray:
     return np.array([pause_ratio, energies.var(), zcrs.var()], dtype=np.float64)
 
 
+# --- Physiological voice-quality features (remediation track 2, see
+# docs/CRITICAL-entity-vs-style-confound.md §4 item 2) ---
+#
+# Standard autocorrelation-based pitch tracking (the same family of
+# algorithm Praat uses for jitter/shimmer/HNR), computed directly on the
+# 3s/16kHz window — no new dependency, pure numpy. This is a deliberate
+# simplification vs. full pitch-synchronous waveform matching: amplitude
+# for shimmer is taken as frame RMS rather than per-cycle peak amplitude,
+# which is standard practice when a lighter-weight implementation is
+# preferred over a full Praat-style pitch-marking pipeline, and is exactly
+# mirrored on the Dart side (see audio_processor.dart) so both sides stay
+# numerically equivalent to each other, which is the actual invariant this
+# project depends on (not exact agreement with Praat itself).
+_PITCH_FRAME_LEN = 480  # 30ms @ 16kHz
+_PITCH_HOP = 160  # 10ms @ 16kHz
+_MIN_F0 = 75.0  # Hz, typical human voice floor
+_MAX_F0 = 500.0  # Hz, typical human voice ceiling
+_MIN_LAG = int(round(SAMPLE_RATE / _MAX_F0))  # 32 samples
+_MAX_LAG = int(round(SAMPLE_RATE / _MIN_F0))  # 213 samples
+_VOICING_THRESHOLD = 0.30  # normalized autocorrelation peak
+
+
+def _pitch_track(pcm: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Returns (periods_s, amplitudes, autocorr_peaks, voiced_mask) — one
+    entry per frame, aligned; unvoiced frames carry period=0/amp=0/r=0 and
+    voiced_mask=False, filtered out by callers."""
+    n = len(pcm)
+    if n < _PITCH_FRAME_LEN:
+        return (np.empty(0), np.empty(0), np.empty(0), np.empty(0, dtype=bool))
+    n_frames = 1 + (n - _PITCH_FRAME_LEN) // _PITCH_HOP
+    periods = np.zeros(n_frames)
+    amps = np.zeros(n_frames)
+    peaks = np.zeros(n_frames)
+    voiced = np.zeros(n_frames, dtype=bool)
+    for i in range(n_frames):
+        start = i * _PITCH_HOP
+        frame = pcm[start:start + _PITCH_FRAME_LEN]
+        amps[i] = np.sqrt(np.mean(frame ** 2))
+        energy0 = np.dot(frame, frame)
+        if energy0 <= 1e-12:
+            continue
+        best_lag, best_r = 0, 0.0
+        for lag in range(_MIN_LAG, min(_MAX_LAG, _PITCH_FRAME_LEN - 1) + 1):
+            a, b = frame[:-lag], frame[lag:]
+            denom = np.sqrt(np.dot(a, a) * np.dot(b, b))
+            if denom <= 1e-12:
+                continue
+            r = np.dot(a, b) / denom
+            if r > best_r:
+                best_r, best_lag = r, lag
+        peaks[i] = best_r
+        if best_r >= _VOICING_THRESHOLD and best_lag > 0:
+            voiced[i] = True
+            periods[i] = best_lag / SAMPLE_RATE
+    return periods, amps, peaks, voiced
+
+
+def extract_physio(pcm: np.ndarray) -> np.ndarray:
+    """3s PCM float buffer -> [jitter_local, shimmer_local, hnr_db].
+    Zeros if fewer than 2 consecutive voiced frames are found (silence,
+    noise, or too-short input) — mirrors extract_prosody's degenerate-input
+    convention of returning zeros rather than raising or returning NaN."""
+    periods, amps, peaks, voiced = _pitch_track(pcm)
+    if voiced.sum() < 2:
+        return np.zeros(3, dtype=np.float64)
+
+    # Jitter/shimmer: only over PAIRS of consecutive (hop-adjacent) voiced
+    # frames — a voiced frame next to an unvoiced one contributes no pair,
+    # same convention Praat uses (skip across unvoiced gaps).
+    pair_mask = voiced[:-1] & voiced[1:]
+    if pair_mask.sum() < 1:
+        return np.zeros(3, dtype=np.float64)
+
+    p0, p1 = periods[:-1][pair_mask], periods[1:][pair_mask]
+    a0, a1 = amps[:-1][pair_mask], amps[1:][pair_mask]
+
+    mean_period = (p0 + p1).mean() / 2
+    jitter_local = np.mean(np.abs(p1 - p0)) / mean_period if mean_period > 1e-12 else 0.0
+
+    mean_amp = (a0 + a1).mean() / 2
+    shimmer_local = np.mean(np.abs(a1 - a0)) / mean_amp if mean_amp > 1e-12 else 0.0
+
+    voiced_peaks = np.clip(peaks[voiced], 0.0, 0.999999)
+    hnr_db = float(np.mean(10 * np.log10(voiced_peaks / (1 - voiced_peaks) + 1e-12)))
+
+    return np.array([jitter_local, shimmer_local, hnr_db], dtype=np.float64)
+
+
 def extract_features(pcm: np.ndarray) -> np.ndarray:
-    """Full 63-d feature vector: 60 LFCC + 3 prosody, matching TFLiteService.infer's
-    `[...lfcc, ...prosody]` concatenation order exactly."""
+    """Full 66-d feature vector: 60 LFCC + 3 prosody + 3 physio, matching
+    TFLiteService.infer's `[...lfcc, ...prosody, ...physio]` concatenation
+    order exactly."""
     lfcc = extract_lfcc(pcm)
     prosody = extract_prosody(pcm)
-    return np.concatenate([lfcc, prosody]).astype(np.float32)
+    physio = extract_physio(pcm)
+    return np.concatenate([lfcc, prosody, physio]).astype(np.float32)
 
 
 def chunk_audio(pcm: np.ndarray, chunk_samples: int = CHUNK_SAMPLES) -> list[np.ndarray]:

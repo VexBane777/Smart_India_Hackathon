@@ -153,7 +153,9 @@ def main() -> None:
     # exported FixedNormalize will actually be used against at inference.
     mean, std = X_train_all.mean(axis=0), X_train_all.std(axis=0) + 1e-8
 
-    model = VoiceGuardMLP(norm_mean=mean, norm_std=std, hidden_dims=tuple(args.hidden_dims)).to(device)
+    model = VoiceGuardMLP(
+        input_dim=X_train_all.shape[1], norm_mean=mean, norm_std=std, hidden_dims=tuple(args.hidden_dims)
+    ).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     loss_fn = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     X_val_t = torch.from_numpy(X_val).to(device)
@@ -207,7 +209,7 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), args.out / "model.pt")
 
-    dummy = torch.from_numpy(X_val[:1]) if len(X_val) else torch.zeros(1, 63)
+    dummy = torch.from_numpy(X_val[:1]) if len(X_val) else torch.zeros(1, X_train_all.shape[1])
     torch.onnx.export(
         model, dummy, str(args.out / "model.onnx"),
         input_names=["features"], output_names=["logits"],

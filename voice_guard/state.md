@@ -1330,6 +1330,69 @@ as done; this file's own convention (see "How to keep this file useful"
 below) is to record what's proven vs. only unit-tested, not to claim
 device-level correctness from code review alone.
 
+## Track 2 (physio-on-MLP) diagnostic retrain: does NOT pass the gate — not deployed (2026-09-11)
+
+Per the design decision recorded in
+`docs/superpowers/specs/2026-09-11-attack-type-differentiator-design.md`
+§2, tracks 2 (physio features), 3 (frame-level sequence model), and 4
+(TTS/VC attack-type differentiator) were consolidated into one
+architecture and training pass
+(`docs/superpowers/plans/2026-09-11-frame-level-seq-model-and-attack-type-plan.md`),
+rather than three separate retrains. Track 2's own retrain
+(`runs/voice_guard_v10_physio`, same corpus/recipe as the deployed
+`v9_noisefix`: `--real data/real data/real2021 data/real_itw_train --fake
+data/fake data/fake2021 data/fake_itw_train --real-clean
+data/real_noise_aug_split/train/{en_native,hi_native} --channel whatsapp
+volte none`, 25 epochs) was run anyway as a **diagnostic-only** measurement
+of whether physio features alone (jitter/shimmer/HNR, added as 3 extra
+scalars to the existing mean-pooled MLP) shrink the entity-vs-style
+confound — its output was never intended for deployment regardless of
+result.
+
+**Result: does not pass.** Measured via `measure_confound.py` (median-split
+analysis, `data/real_itw_held`) against the checkpoint selected by
+`select_best_checkpoint.py` (epoch 3, chosen via noise-FPR-style
+selection on `data/real_noise_aug_split/held` + `data/fake_itw_held`, not
+by peeking at the ITW held-out eval set used below):
+
+| feature | v9_noisefix (deployed) gap | v10_physio gap |
+|---|---|---|
+| energyVariance | 12.2 pts (25.1% vs 12.9%) | 12.2 pts — **unchanged** |
+| pauseRatio | 8.9 pts (14.7% vs 23.6%) | **0.5 pts — nearly eliminated** |
+| zcrVariance | 11.8 pts (13.1% vs 24.9%) | 18.8 pts — **worse** |
+
+The plan's pass condition requires *both* energyVariance and pauseRatio to
+shrink substantially — pauseRatio did, energyVariance did not, so this
+fails the confound-reduction bar regardless of the table below.
+
+**Also a real ITW-EER regression**, not just a wash: `eval_held_out_dirs.py
+--baseline-eer 0.1538` (v9_noisefix's own re-measured baseline) against
+`data/real_itw_held`/`data/fake_itw_held`:
+- Final epoch (25): EER=0.2756
+- Best-selected epoch (3): EER=0.2226, 95% bootstrap CI [0.2069, 0.2402]
+  (file-level, n=2802, 1000 resamples) — does not overlap 0.1538, so this
+  is a real, statistically robust regression, not noise-level.
+
+**Not deployed.** `assets/models/voice_detector.onnx` is unchanged.
+`runs/voice_guard_v10_physio/` and `runs/voice_guard_v10_physio_selected/`
+are kept for the record, not used further.
+
+**What this means for track 3**: adding physio as extra scalars to the
+*same* mean-pooled MLP architecture isn't enough — consistent with the
+CRITICAL doc's own original framing that this representational ceiling
+(mean-pooled statistics can't distinguish delivery style from generation
+artifacts) is an architecture problem, not a feature problem, and track 3
+(frame-level sequence CNN) was always the more-likely-to-actually-work
+option. The consolidated track 2+3+4 implementation
+(`VoiceGuardSeqCNN` — per-frame LFCC sequence through a Conv1d stack,
+physio/prosody as scalars concatenated onto the pooled embedding, plus a
+masked TTS/VC attack-type head) is implemented and unit-tested on branch
+`voiceguard-track3-track4-seqcnn` (worktree
+`.worktrees/voiceguard-track3-track4-seqcnn`); its own real-corpus
+retrain and confound/EER gate (same discipline as above, this time against
+the sequence-CNN architecture) is the next actual deploy decision — this
+MLP-plus-physio number is not it.
+
 ## How to keep this file useful
 
 - Update the "Current status" date and paragraph at the *start* of a

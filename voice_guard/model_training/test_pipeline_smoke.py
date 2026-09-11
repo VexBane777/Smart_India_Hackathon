@@ -49,7 +49,7 @@ def _write_synthetic_corpus(root: Path, n_per_class: int = 6, seconds: float = 4
 def test_feature_extraction_shape():
     pcm = np.zeros(48000, dtype=np.float32)
     feats = extract_features(pcm)
-    assert feats.shape == (63,)
+    assert feats.shape == (66,)
     assert feats.dtype == np.float32
 
 
@@ -64,7 +64,7 @@ def test_end_to_end_train_and_export(tmp_path: Path = None):
     assert {e.source_file for e in train_ex} & {e.source_file for e in val_ex} == set()
 
     X_train, y_train = to_arrays(train_ex)
-    assert X_train.shape[1] == 63
+    assert X_train.shape[1] == 66
     assert set(y_train.tolist()) <= {0, 1}
 
     mean, std = X_train.mean(axis=0), X_train.std(axis=0) + 1e-8

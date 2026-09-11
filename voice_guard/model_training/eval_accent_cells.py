@@ -27,8 +27,10 @@ def main() -> None:
     ap.add_argument("--model", type=Path, required=True)
     args = ap.parse_args()
 
-    model = VoiceGuardMLP()
-    model.load_state_dict(torch.load(args.model, map_location="cpu", weights_only=True))
+    state = torch.load(args.model, map_location="cpu", weights_only=True)
+    input_dim = state["normalize.mean"].shape[0]  # derive from checkpoint, not the current INPUT_DIM constant
+    model = VoiceGuardMLP(input_dim=input_dim)
+    model.load_state_dict(state)
     model.eval()
 
     print(f"{'cell':<12} {'windows':>8} {'files':>7}  eer")

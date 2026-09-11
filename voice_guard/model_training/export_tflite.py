@@ -11,7 +11,7 @@ a CPU-only box just for this one conversion. Run it wherever train.py ran:
         --out ../assets/models/voice_detector.tflite
 
 Verifies the converted model's input/output shapes match what
-lib/services/src/tflite_io.dart expects: input (1, 63) float32,
+lib/services/src/tflite_io.dart expects: input (1, 66) float32,
 output (1, 2) float32 raw logits — see TFLiteService.infer's reshape
 and softmax, which assumes exactly this shape.
 """
@@ -79,7 +79,7 @@ def _verify_shapes(tflite_path: Path) -> None:
     interpreter.allocate_tensors()
     in_shape = interpreter.get_input_details()[0]["shape"].tolist()
     out_shape = interpreter.get_output_details()[0]["shape"].tolist()
-    assert in_shape[-1] == 63, f"expected input dim 63, got {in_shape}"
+    assert in_shape[-1] == 66, f"expected input dim 66, got {in_shape}"
     assert out_shape[-1] == 2, f"expected output dim 2 (real/synthetic logits), got {out_shape}"
     print(f"Verified shapes: input={in_shape} output={out_shape}")
 

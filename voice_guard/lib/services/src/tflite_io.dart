@@ -4,7 +4,7 @@ import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
 import '../../utils/audio_processor.dart';
 
 /// Runs the exported ONNX model (see model_training/README.md's "Feature
-/// contract" — 63-float [...lfcc, ...prosody] in, (1,2) raw-logit "logits"
+/// contract" — 66-float [...lfcc, ...prosody, ...physio] in, (1,2) raw-logit "logits"
 /// out, softmax applied here) via flutter_onnxruntime. Replaces the
 /// previous tflite_flutter path; kept this file's name and the
 /// TFLiteService class name to avoid touching every call site
@@ -17,7 +17,7 @@ class TFLiteService {
   bool _ready = false;
   bool get isReady => _ready;
 
-  static const int _inputDim = 63; // must match model_training's INPUT_DIM (model.py)
+  static const int _inputDim = 66; // must match model_training's INPUT_DIM (model.py)
 
   Future<void> init() async {
     final ort = OnnxRuntime();
@@ -31,11 +31,11 @@ class TFLiteService {
     }
   }
 
-  Future<double> infer(List<double> lfcc, List<double> prosody) async {
+  Future<double> infer(List<double> lfcc, List<double> prosody, List<double> physio) async {
     final session = _session;
     if (_ready && session != null) {
       try {
-        final input = [...lfcc, ...prosody];
+        final input = [...lfcc, ...prosody, ...physio];
         final trimmed = input.sublist(0, math.min(_inputDim, input.length));
         while (trimmed.length < _inputDim) { trimmed.add(0); }
 
@@ -80,7 +80,8 @@ class TFLiteService {
   Future<double> scoreChunk(List<double> pcm) {
     final lfcc = AudioProcessor.extractLfcc(pcm);
     final prosody = AudioProcessor.extractProsody(pcm);
-    return infer(lfcc, prosody);
+    final physio = AudioProcessor.extractPhysio(pcm);
+    return infer(lfcc, prosody, physio);
   }
 
   void dispose() { _session?.close(); }
