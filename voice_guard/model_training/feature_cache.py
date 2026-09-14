@@ -39,7 +39,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -469,8 +469,7 @@ def _reconstruct_specs_from_meta(unit_dir: Path, recipe: str | None) -> list:
             else:
                 conv, keep = 0.0, 1.0
             for g in grp:
-                g.convert_prob = conv
-                g.keep_short_prob = keep
+                specs_by_id[g.file_id] = replace(g, convert_prob=conv, keep_short_prob=keep)
     return [specs_by_id[f] for f in order]
 
 
