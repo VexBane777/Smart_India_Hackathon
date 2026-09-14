@@ -19,12 +19,15 @@ the new playback deploy gate. **v13 = v12's recipe + a playback rendition +
 fake-side confound remediation**, gated by all four criteria.
 
 ## Working set
-- Branch: `vaani` (this repo). Latest upstream at session start: `bd2a553`;
-  v13 protocol commits pushed this session: `e2d6874` (acoustic group, scoped
-  caches, playback rendition, selection objective, EVAL-PROTOCOL §2/§6) and
-  `f350840` (`--playback-fraction` provenance + acoustic val log; legacy
-  `train_` units re-derive pad params from raw-header durations so revalidate
-  can re-stamp them exact; 39/39 protocol/train/eval tests green).
+- Branch: `vaani` (this repo). v13 protocol commits: `e2d6874` (acoustic
+  group, scoped caches, playback rendition, selection objective,
+  EVAL-PROTOCOL §2/§6) and `f350840` (`--playback-fraction` provenance +
+  acoustic val log; legacy `train_` units re-derive pad params from
+  raw-header durations so revalidate can re-stamp them exact), plus
+  `407c055` (this session: fixes a `FrozenInstanceError` that made
+  `revalidate()` crash on EVERY legacy unit — FileSpec is frozen — so step
+  6's `--revalidate-stale` path actually works; adds
+  `v13_stageA_cache.cmd` / `v13_stageB_train_eval.cmd`).
 - Code dirs: `voice_guard/model_training/` (training/eval code) and
   `vaani/telechannel/` (pipeline/stages). Python venv:
   `voice_guard/model_training/.venv313/Scripts/python.exe`.
@@ -45,10 +48,19 @@ Steps from `2026-09-12-post-v12-plan.md`:
   evaluate.py acoustic row, **pre-register acoustic deploy gate** in
   `EVAL-PROTOCOL.md` sec 6.
 - [x] 5. Bring `eval_playback_loop.py` under the protocol (policy-discovery test).
-- [ ] 6. Build playback eval caches -> re-score v9/v11/v12 on `acoustic`
-      (long-running; runbook below). ~14 units.
+- [~] 6. Build playback eval caches -> re-score v9/v11/v12 on `acoustic`
+      (RUNNING detached since 2026-09-14 ~16:00 IST: `v13_stageA_cache.cmd`,
+      log `model_training/runs/v13_stageA_cache.log`; read-only inventory
+      first: 130 STALE legacy units (cache_format 1 + global hash, re-stamped
+      in place by `--revalidate-stale`, proven equivalent max_abs_diff 0 on a
+      trial unit) + 22 MISSING playback units — 14 eval + 8 train — 0
+      non-playback MISSING; 98 orphaned old-key dirs remain on disk,
+      harmless). v13_stageA also builds the 8 train playback units.
 - [x] 7. Train v13: third `playback` rendition for hash-selected ~50% of
       training files; selection objective pooled over phone+acoustic.
+      (staged: `v13_stageB_train_eval.cmd` waits on stage A, then
+      train -> select -> fp16 validate -> evaluate (all four gates) ->
+      playback-loop ONNX gate.)
 - [ ] 8. v13 deploy decision (all four gates); then message UI session before
       copying to `assets/models/voice_detector.onnx`.
 - [ ] 9. On-device verification (Test-with-audio-file + Live Mic loop), record
