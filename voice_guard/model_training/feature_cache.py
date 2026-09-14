@@ -420,10 +420,12 @@ class CacheCollection:
 def _reconstruct_specs_from_meta(unit_dir: Path, recipe: str | None) -> list:
     """Rebuild the FileSpecs that produced a cache unit from its meta so a
     sample can be re-rendered with EXACTLY the pad policy that was used.
-    Legacy units (built before `pad_policy` was stored) fall back to
-    recomputing the pad policy per source_set (best-effort; mis-derived params
-    make revalidate report not-equivalent, which is the safe outcome)."""
-    from dataset import DATA_ROOT, FileSpec, compute_pad_policy
+    v13+ goes through the stored per-file `pad_policy` (exact). Legacy units
+    (no `pad_policy`) re-derive it by name: `train_` units use the v12
+    raw-header pre-pass, everything else the natural (0.0, 1.0) defaults.
+    Best-effort for legacy sets whose policy was min() capped per set; a miss
+    reads as not-equivalent (safe: rebuild instead of re-stamp)."""
+    from dataset import DATA_ROOT, FileSpec, compute_pad_policy, estimate_duration_seconds
 
     with np.load(unit_dir / "meta.npz") as z:
         fid = [str(x) for x in z["file_id"]]
@@ -458,8 +460,14 @@ def _reconstruct_specs_from_meta(unit_dir: Path, recipe: str | None) -> list:
         by_set = {}
         for s in specs_by_id.values():
             by_set.setdefault(s.source_set, []).append(s)
-        for grp in by_set.values():
-            conv, keep, _frac = compute_pad_policy([first_dur[g.file_id] for g in grp])
+        unit_name = str(manifest.get("name", ""))
+        for ss, grp in by_set.items():
+            if unit_name.startswith("train_"):
+                # v12 training units: raw-header durations (same as the
+                # training pad-policy pre-pass). Eval units: natural defaults.
+                conv, keep, _frac = compute_pad_policy([estimate_duration_seconds(Path(s.path)) for s in grp])
+            else:
+                conv, keep = 0.0, 1.0
             for g in grp:
                 g.convert_prob = conv
                 g.keep_short_prob = keep

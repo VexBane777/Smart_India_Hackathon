@@ -64,10 +64,11 @@ def eval_units(split: str, channels, set_names=None, attack_type_maps=None):
     return [(f"eval_{split}_{name}", specs, ch) for name, specs in specs_by_set.items() for ch in channels]
 
 
-def train_units_for(cache_root: Path, seed: int = 0, attack_type_maps=None, workers: int = 10):
+def train_units_for(cache_root: Path, seed: int = 0, attack_type_maps=None, workers: int = 10,
+                    playback_fraction: float = 0.5):
     specs_by_set = training_specs(attack_type_maps=attack_type_maps,
                                   duration_cache=cache_root / "train_durations.json", workers=workers)
-    return training_units(specs_by_set, seed)
+    return training_units(specs_by_set, seed, playback_fraction=playback_fraction)
 
 
 def build_all(units, cache_root: Path, workers: int, seed: int, rebuild: bool,
@@ -95,6 +96,11 @@ def main() -> None:
     ap.add_argument("--channels", nargs="*", default=None, help="eval channels (default: none + every phone and acoustic channel)")
     ap.add_argument("--application", default="phone", choices=APPLICATIONS)
     ap.add_argument("--train", action="store_true", help="build training caches (incl. the v13 playback rendition)")
+    ap.add_argument("--playback-fraction", type=float, default=0.5,
+                    help="hash-selected share of training files that ALSO get a third "
+                         "playback rendition (deterministic via stable_unit; default "
+                         "0.5 = the pre-registered v13 recipe). Recorded by the run "
+                         "alongside the hash in train_config.json")
     ap.add_argument("--cache-root", type=Path, default=None)
     ap.add_argument("--workers", type=int, default=10)
     ap.add_argument("--seed", type=int, default=0)
@@ -115,7 +121,7 @@ def main() -> None:
         for split in args.splits:
             units += eval_units(split, channels, args.eval_sets, maps)
     if args.train:
-        units += train_units_for(cache_root, args.seed, maps, args.workers)
+        units += train_units_for(cache_root, args.seed, maps, args.workers, args.playback_fraction)
     n_files = sum(len(s) for _n, s, _c in units)
     print(f"[build] {len(units)} units, {n_files} file-renditions -> {cache_root}", file=sys.stderr, flush=True)
     todo = [u for u in units if not (unit_dir(cache_root, u[0], u[1], u[2], args.seed) / "manifest.json").exists()]

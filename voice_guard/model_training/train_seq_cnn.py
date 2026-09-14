@@ -39,7 +39,7 @@ from pathlib import Path
 import numpy as np
 
 from dataset import IGNORE_ATTACK_TYPE, stable_unit
-from eval_protocol import APPLICATIONS, TRAIN_CHANNELS, channel_name, phone_subset, resolve_channels
+from eval_protocol import APPLICATIONS, TRAIN_CHANNELS, acoustic_subset, channel_name, phone_subset, resolve_channels
 from eval_stats import balanced_accuracy, compute_eer
 
 # torch is imported lazily (inside functions) on purpose: the cache build
@@ -109,7 +109,8 @@ def build_training_collection(args, channels):
         sets = TRAIN_SETS_V12
     specs_by_set = training_specs(sets, attack_type_maps=maps, balance_pad=not args.no_pad_balance,
                                   duration_cache=args.cache_root / "train_durations.json", workers=args.workers)
-    units = training_units(specs_by_set, args.seed, tuple(channels))
+    units = training_units(specs_by_set, args.seed, tuple(channels),
+                           playback_fraction=args.playback_fraction)
     dirs = []
     with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:
         for name, specs, ch in units:
@@ -169,6 +170,10 @@ def main() -> None:
     ap.add_argument("--fake", type=Path, nargs="*", default=[], help="custom fake dirs")
     ap.add_argument("--channel", "--channels", dest="channels", nargs="*", default=None,
                     help="training channels (default: none whatsapp volte cellular_3g)")
+    ap.add_argument("--playback-fraction", type=float, default=0.5,
+                    help="hash-selected share of training files that ALSO get a third "
+                         "playback rendition (deterministic via stable_unit; default "
+                         "0.5 = the pre-registered v13 recipe)")
     ap.add_argument("--application", default="phone", choices=APPLICATIONS)
     ap.add_argument("--arch", default="seqtcn_v2", choices=["seqtcn_v2", "seqcnn_v1"])
     ap.add_argument("--out", type=Path, default=Path("runs/voice_guard_v12"))
@@ -235,6 +240,7 @@ def main() -> None:
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     np.savez(args.out / "norm_stats.npz", **norm_stats)
     phone_val = val_idx[np.isin(coll.channel[val_idx], phone_subset(channels))]
+    acous_val = val_idx[np.isin(coll.channel[val_idx], acoustic_subset(channels))]
     def json_safe(v):
         if isinstance(v, Path):
             return str(v)
@@ -246,7 +252,8 @@ def main() -> None:
     config.update({"channels": [channel_name(c) for c in channels], "leave_out_attacks": list(leave_out),
                    "unit_dirs": [str(d) for d in unit_dirs], "n_params": n_params,
                    "n_windows": coll.n, "n_train": len(train_idx), "n_val": len(val_idx),
-                   "feature_version": coll.manifests[0]["feature_version"] if coll.manifests else None})
+                   "feature_version": coll.manifests[0]["feature_version"] if coll.manifests else None,
+                   "playback_fraction": args.playback_fraction})
     (args.out / "train_config.json").write_text(json.dumps(config, indent=1))
     print(f"arch={args.arch} params={n_params} steps/epoch={steps_per_epoch}", flush=True)
 
@@ -288,14 +295,18 @@ def main() -> None:
         val_eer = compute_eer(p_fake, y_val)
         pm = np.isin(val_idx, phone_val)
         val_eer_phone = compute_eer(p_fake[pm], y_val[pm]) if pm.any() else float("nan")
+        amask = np.isin(val_idx, acous_val)
+        val_eer_acoustic = compute_eer(p_fake[amask], y_val[amask]) if amask.any() else float("nan")
         am = attack_target[val_idx] >= 0
         att_bacc = balanced_accuracy(attack_target[val_idx][am], att[am].argmax(1)) if am.any() else float("nan")
         rec = {"epoch": epoch + 1, "train_loss": total_loss, "val_eer": val_eer, "val_eer_phone": val_eer_phone,
+               "val_eer_acoustic": val_eer_acoustic,
                "val_attack_bacc": att_bacc, "lr_end": lr_at(step - 1, total_steps, warmup_steps, args.lr),
                "seconds": time.time() - t0}
         history.append(rec)
         print(f"epoch {epoch + 1}/{args.epochs} loss={total_loss:.4f} val_eer={val_eer:.4f} "
-              f"val_eer_phone={val_eer_phone:.4f} attack_bacc={att_bacc:.3f} ({rec['seconds']:.0f}s)", flush=True)
+              f"val_eer_phone={val_eer_phone:.4f} val_eer_acoustic={val_eer_acoustic:.4f} "
+              f"attack_bacc={att_bacc:.3f} ({rec['seconds']:.0f}s)", flush=True)
         torch.save({k: v.cpu() for k, v in ema.model.state_dict().items()}, ckpt_dir / f"epoch_{epoch + 1:02d}.pt")
         (args.out / "history.json").write_text(json.dumps(history, indent=1))
     prefetch.shutdown()
