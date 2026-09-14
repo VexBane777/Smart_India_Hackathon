@@ -19,7 +19,12 @@ the new playback deploy gate. **v13 = v12's recipe + a playback rendition +
 fake-side confound remediation**, gated by all four criteria.
 
 ## Working set
-- Branch: `vaani` (this repo). Latest upstream at session start: `bd2a553`.
+- Branch: `vaani` (this repo). Latest upstream at session start: `bd2a553`;
+  v13 protocol commits pushed this session: `e2d6874` (acoustic group, scoped
+  caches, playback rendition, selection objective, EVAL-PROTOCOL §2/§6) and
+  `f350840` (`--playback-fraction` provenance + acoustic val log; legacy
+  `train_` units re-derive pad params from raw-header durations so revalidate
+  can re-stamp them exact; 39/39 protocol/train/eval tests green).
 - Code dirs: `voice_guard/model_training/` (training/eval code) and
   `vaani/telechannel/` (pipeline/stages). Python venv:
   `voice_guard/model_training/.venv313/Scripts/python.exe`.
