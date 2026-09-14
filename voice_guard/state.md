@@ -1756,11 +1756,18 @@ Training-time val EER (0.184 phone) vs held-out (0.322) is a 14-point
 generalization gap: val files come from the training sources, so training
 val is not a substitute for the held-out split.
 
-**Next:** `docs/superpowers/plans/2026-09-12-post-v12-plan.md` — the
-acoustic-loop `playback` channel that upstream added (the on-device failure
-mode), precise cache invalidation, then a v13 that must fix the fake-side
-confound rather than only adding channels. Unseen-channel generalization and
-the accent cells are the two other open fronts.
+**Next:** v13 protocol work (2026-09-14, done; details in `/v13_state.md` —
+next sessions read that first): `playback` is now the `acoustic` channel
+group (`eval_protocol.ACOUSTIC_CHANNELS`, in `DEFAULT_EVAL_CHANNELS`,
+`evaluate.py` reports it with a pre-registered deploy gate in
+`EVAL-PROTOCOL.md` §6), feature-version is recipe-scoped with
+`revalidate()` + `build_caches.py --revalidate-stale`, and v13 training gets
+a third `playback` rendition for a hash-selected ~50% of files (selection on
+phone+acoustic pooled EER). What remains is the long-running part:
+6. build playback eval caches (~14 units) and re-score v9/v11/v12 on
+`acoustic`; 7. train/select/evaluate v13; 8. the four-gate deploy decision;
+9. on-device verification. Unseen-channel generalization and the accent cells
+are the two other open fronts.
 
 ## How to keep this file useful
 

@@ -12,11 +12,14 @@ from pathlib import Path
 import pytest
 
 from eval_protocol import (
+    ACOUSTIC_CHANNELS,
+    ALL_RECIPES,
     DEFAULT_EVAL_CHANNELS,
     PHONE_CHANNELS,
     TRAIN_CHANNELS,
     UNSEEN_CHANNELS,
     CleanOnlyEvalError,
+    acoustic_subset,
     parse_channel_arg,
     resolve_channels,
 )
@@ -24,9 +27,20 @@ from eval_protocol import (
 HERE = Path(__file__).resolve().parent
 
 
-def test_default_eval_channels_are_none_plus_every_phone_channel():
-    assert resolve_channels(None, "phone", "eval") == [None, *PHONE_CHANNELS]
+def test_default_eval_channels_are_none_plus_every_phone_and_acoustic_channel():
+    assert resolve_channels(None, "phone", "eval") == [None, *ALL_RECIPES]
     assert DEFAULT_EVAL_CHANNELS[0] is None
+    assert set(ACOUSTIC_CHANNELS) == {"playback"}
+    assert set(ALL_RECIPES) == set(PHONE_CHANNELS) | {"playback"}
+
+
+def test_playback_is_a_valid_acoustic_channel():
+    assert resolve_channels(["none", "whatsapp", "playback"], "phone", "eval") == [None, "whatsapp", "playback"]
+    assert acoustic_subset(["none", "playback", "whatsapp"]) == ["playback"]
+    # acoustic alone is a real capture path but not a phone path: still refused
+    # for the phone application (policy: eval/training needs a phone channel).
+    with pytest.raises(CleanOnlyEvalError):
+        resolve_channels(["playback"], "phone", "eval")
 
 
 def test_default_train_channels():
@@ -119,8 +133,53 @@ def test_checkpoint_selection_never_reads_the_test_split():
     assert select_best_checkpoint_seqcnn.SPLIT == "select"
 
 
+# Scripts that parse args AND load a model (an eval/training entry point) but
+# intentionally do not route channels through resolve_channels. Kept as a
+# deliberate, reviewed allowlist so the discovery below does not silently
+# exempt a new eval script; each entry needs a one-line, still-true reason.
+_MODEL_ENTRY_ALLOWLIST = {
+    "eval_playback_loop.py": (
+        "scores the shipped ONNX clean and looped per asset; has no channel-"
+        "policy dimension (one model, no split, no recipe mix) and is a "
+        "supplementary on-device gate, not an eval."),
+}
+
+
+def _eval_entry_points() -> list[Path]:
+    """Every non-test script that parses args and loads a model: the scripts
+    that must never bypass the channel policy. The v12 code hard-coded five
+    names, so a new eval script slipped past the check silently (the hole
+    eval_playback_loop exposed). Discovery, not a fixed list."""
+    entry_points = []
+    for p in _scripts():
+        src = p.read_text(encoding="utf-8")
+        loads = any(k in src for k in ("onnxruntime", "InferenceSession", "session.run",
+                                       "torch.load", "load_scoring_model", "build_model_from_norm_stats"))
+        parses_args = "ArgumentParser" in src or "argparse" in src
+        if loads and parses_args:
+            entry_points.append(p)
+    return entry_points
+
+
 def test_every_eval_entry_point_resolves_channels_through_the_policy():
-    for name in ("evaluate.py", "select_best_checkpoint_seqcnn.py", "train_seq_cnn.py", "build_caches.py",
-                 "validate_fp16.py"):
-        src = (HERE / name).read_text(encoding="utf-8")
-        assert "resolve_channels(" in src, f"{name} does not call eval_protocol.resolve_channels"
+    """Every script that parses args and loads a model must either call
+    eval_protocol.resolve_channels or be explicitly allowlisted with a reason
+    (see _MODEL_ENTRY_ALLOWLIST). Catches a new eval script bypassing the
+    no-clean-only policy without review."""
+    offenders = []
+    for p in _eval_entry_points():
+        if "resolve_channels(" in p.read_text(encoding="utf-8"):
+            continue
+        if p.name in _MODEL_ENTRY_ALLOWLIST:
+            continue
+        offenders.append(p.name)
+    assert not offenders, (
+        "eval entry point(s) do not route channels through "
+        f"resolve_channels: {offenders}. Add resolve_channels, or add an "
+        "explicit _MODEL_ENTRY_ALLOWLIST entry with a one-line reason.")
+
+
+def test_eval_playback_loop_is_intentionally_allowlisted():
+    import eval_playback_loop as m
+    assert "eval_playback_loop.py" in _MODEL_ENTRY_ALLOWLIST
+    assert m is not None

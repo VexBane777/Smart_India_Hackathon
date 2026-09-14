@@ -34,6 +34,14 @@ Enforcement:
 | reference | `none` | a reference row in every report, never a result on its own |
 | seen phone | `whatsapp`, `volte`, `cellular_3g` | training + eval |
 | unseen phone | `gsm_2g`, `pstn`, `tandem_xnet` | eval only (never trained on) |
+| **acoustic** | `playback` | the loudspeaker -> phone-mic loop (no codec/loss; analog end-to-end). Evalled for all, and since v13 trained on a hash-selected ~50% of files |
+
+Recipes: `vaani/telechannel/configs/channels.yaml`. Default eval =
+`none` + six phone channels + `playback` (8 units per eval set), since v13.
+**Headline numbers pool the phone channels.** Training renders each file
+twice: `none` plus one phone channel from the seen group, chosen by file
+hash — plus (v13) a third `playback` rendition for a hash-selected ~50% of
+files.
 
 Recipes: `vaani/telechannel/configs/channels.yaml`. Default eval =
 `none` + all six phone channels. **Headline numbers pool the phone
@@ -91,12 +99,16 @@ gave 762 files in one script and 757 in another.
 
 Per (file list, channel, seed) unit: `seq.npy` (float16, memory-mapped),
 `scalars.npy`, `meta.npz`, `manifest.json`. Built in resumable shards with
-bounded RAM (this fixes v11's OOM). The manifest stores a **feature-version
-hash** over the code of features.py, dataset.py and TeleChannel (AST,
-docstrings stripped), channels.yaml's content, library versions and the
-ffmpeg build. A stale cache raises `StaleCacheError` and is never silently
-reused. float16 storage is validated by `validate_fp16.py` (gate: max
-|Δp| <= 0.01).
+bounded RAM (this fixes v11's OOM). Since v13 the manifest stores a
+**recipe-scoped feature-version hash**: the unit's OWN recipe block (plus the
+`rooms` entries it references), not the whole channels.yaml — so adding or
+changing one recipe no longer marks every other unit stale (a whole-corpus
+false rebuild). `build_caches.py --revalidate-stale` measures (re-renders a
+sample and compares within fp16 tolerance) whether a stale unit is truly
+unchanged and re-stamps it (`revalidated_from` recorded); rebuilds only what
+really changed. A stale cache still raises `StaleCacheError` by default and is
+never silently reused. float16 storage is validated by `validate_fp16.py`
+(gate: max |Δp| <= 0.01).
 
 ## 6. Metrics and gates (evaluate.py)
 
@@ -106,8 +118,18 @@ Operating threshold per model = its phone-pooled EER threshold on
 - **Headline**: EER on core sets, pooled over phone channels, with a 95%
   bootstrap CI resampled by source file (all windows and channels of a file
   together); FPR/FNR at the select threshold and at the app's 0.60.
-- EER per channel, seen vs unseen phone groups, padded windows only,
-  core+MLAAD, per set (FPR for real sets, FNR for fake sets), accent cells.
+- EER per channel, seen vs unseen phone groups, the `acoustic` group, padded
+  windows only, core+MLAAD, per set (FPR for real sets, FNR for fake sets),
+  accent cells.
+- **Acoustic headline**: `playback` EER on core sets (`test`), file-bootstrap
+  CI. Deliberately NOT folded into the phone headline or the confound pool:
+  it is the on-device loop measured on the held-out data, not just two assets.
+  Pre-registered BEFORE any model was scored on it (v13 protocol, 2026-09-14):
+  a candidate's playback EER must beat the deployed reference's. Closing the
+  policy hole this exposed, the static policy test now DISCOVERS every eval
+  entry point (no fixed list); `eval_playback_loop.py` — which scores the
+  shipped ONNX clean and looped per asset and has no channel-policy dimension
+  — is kept as a supplementary gate under an explicit allowlist with a reason.
 - **Confound v2**, reals AND fakes, features pauseRatio, energyVariance,
   zcrVariance, jitter, shimmer, HNR, pad_fraction: half-means (median
   split), absolute gap, ratio, Spearman ρ with p_fake, and FPR (reals) /
@@ -129,8 +151,10 @@ Operating threshold per model = its phone-pooled EER threshold on
   **Gates**: leave-out balanced accuracy >= 0.70 and MLAAD tts share >= 0.70.
   If they fail, hide the sub-label in the app.
 - **Deploy gate** (`--candidate --reference`): the candidate passes every
-  confound gate AND beats the reference's test headline EER. CI overlap is
-  reported alongside.
+  confound gate AND beats the reference's test headline EER. Since v13 it must
+  ALSO beat the reference's **acoustic** (playback) EER. CI overlap is
+  reported alongside. And the supplementary `eval_playback_loop.py` gates
+  (fake clean >= 0.60, fake loop >= 0.50) must pass.
 
 Deprecated metric: the v11-era "gap" (absolute difference of real-clip
 half-means on clean audio) depends on the model's score scale and hides

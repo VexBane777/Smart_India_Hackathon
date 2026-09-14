@@ -5,10 +5,11 @@ history held.
 
 TRAIN_SETS_V12: the v11 corpus (the v9_noisefix corpus plus its noise-aug
 reals) with fake2021 capped at 40,000 files by stable hash. Uncapped, fakes
-outnumber reals ~4.5:1 by file. Each file is rendered twice: once with
-channel `none` and once with ONE phone channel drawn deterministically from
-TRAIN_PHONE_CHANNELS by file hash. That's 2x the files, a compromise
-between v9's 3x and memory/time. Short-clip padding is balanced per set
+outnumber reals ~4.5:1 by file. Since v13, each file is rendered in up to
+three renditions: `none`, ONE phone channel drawn deterministically from
+TRAIN_PHONE_CHANNELS by file hash, and a third `playback` rendition for a
+hash-selected ~50% of files (corpus.training_units, `stable_unit(...,
+"playback") < 0.5`). Short-clip padding is balanced per set
 (dataset.compute_pad_policy).
 
 Eval sets come from the committed split manifest
@@ -24,7 +25,7 @@ from pathlib import Path
 
 import soundfile as sf
 
-from dataset import DATA_ROOT, FileSpec, compute_pad_policy, make_file_specs, stable_seed
+from dataset import DATA_ROOT, FileSpec, compute_pad_policy, make_file_specs, stable_seed, stable_unit
 from eval_protocol import TRAIN_PHONE_CHANNELS
 
 MODEL_TRAINING_DIR = Path(__file__).resolve().parent
@@ -150,11 +151,15 @@ def train_phone_channel_from(file_id: str, phone_channels: tuple[str, ...], seed
 
 def training_units(
     specs_by_set: dict[str, list[FileSpec]], seed: int = 0,
-    channels: tuple[str | None, ...] | None = None) -> list[tuple[str, list[FileSpec], str | None]]:
+    channels: tuple[str | None, ...] | None = None,
+    playback_fraction: float = 0.5) -> list[tuple[str, list[FileSpec], str | None]]:
     """(unit name, specs, recipe) for every training rendition: each set
-    once with `none` (if in `channels`), and each file once more through ONE
-    phone channel from `channels` chosen by file hash. Default channels:
-    TRAIN_CHANNELS."""
+    once with `none` (if in `channels`), each file once more through ONE
+    phone channel from `channels` chosen by file hash, plus (v13) a third
+    `playback` rendition for a hash-selected `playback_fraction` (~50%) of
+    files so the model learns the acoustic-loudspeaker->mic loop as a
+    fake-presenting channel. Default channels: TRAIN_CHANNELS (+ acoustic
+    playback rendition always, since it is now part of the v13 recipe)."""
     channels = tuple(channels) if channels is not None else (None,) + TRAIN_PHONE_CHANNELS
     phone = tuple(c for c in channels if c is not None)
     units = []
@@ -165,6 +170,11 @@ def training_units(
             sub = [s for s in specs if train_phone_channel_from(s.file_id, phone, seed) == ch]
             if sub:
                 units.append((f"train_{name}", sub, ch))
+        # v13: playback rendition for a deterministic subset (stable_unit, so
+        # the same ~50% every run regardless of file order).
+        pb = [s for s in specs if stable_unit(s.file_id, seed, "playback") < playback_fraction]
+        if pb:
+            units.append((f"train_{name}", pb, "playback"))
     return units
 
 

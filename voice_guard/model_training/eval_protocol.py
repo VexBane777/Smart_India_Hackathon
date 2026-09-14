@@ -31,14 +31,28 @@ from typing import Iterable, Sequence
 # Every recipe that models a real phone path. `clean` deliberately excluded.
 PHONE_CHANNELS: tuple[str, ...] = ("whatsapp", "volte", "cellular_3g", "gsm_2g", "pstn", "tandem_xnet")
 
+# Acoustic channel group: the loudspeaker -> phone-mic playback loop. Not a
+# telephony path (no codec/loss — it is analog end-to-end), but a real
+# phone-capture mode: the on-device failure the v12 report identified. v13
+# must both evaluate on it and (for ~50% of training files) train on it.
+ACOUSTIC_CHANNELS: tuple[str, ...] = ("playback",)
+
+# Every recipe that models a real capture path (phone + acoustic). Used by
+# resolve_channels as the set of valid recipe names, and as the default eval
+# footprint.
+ALL_RECIPES: tuple[str, ...] = PHONE_CHANNELS + ACOUSTIC_CHANNELS
+
 # Training sees `none` plus these three. The other three phone channels are
-# never trained on, so they form the "unseen channel" eval group.
+# never trained on, so they form the "unseen channel" eval group. The acoustic
+# group is intentionally NOT here: playback is added as a separate hash-selected
+# training rendition in corpus.training_units, not as a plain per-file channel.
 TRAIN_CHANNELS: tuple[str | None, ...] = (None, "whatsapp", "volte", "cellular_3g")
 TRAIN_PHONE_CHANNELS: tuple[str, ...] = tuple(c for c in TRAIN_CHANNELS if c is not None)
 UNSEEN_CHANNELS: tuple[str, ...] = tuple(c for c in PHONE_CHANNELS if c not in TRAIN_CHANNELS)
 
-# `none` is a reference row in every report, never an eval on its own.
-DEFAULT_EVAL_CHANNELS: tuple[str | None, ...] = (None,) + PHONE_CHANNELS
+# `none` is a reference row in every report, never an eval on its own. The
+# default eval footprint is every real capture recipe.
+DEFAULT_EVAL_CHANNELS: tuple[str | None, ...] = (None,) + ALL_RECIPES
 
 APPLICATIONS: tuple[str, ...] = ("phone", "bank")
 FORBIDDEN_RECIPES: frozenset[str] = frozenset({"clean"})
@@ -93,8 +107,8 @@ def resolve_channels(
                 "no codec). It is neither undegraded audio nor a phone path. Use 'none' "
                 f"for undegraded audio or one of {PHONE_CHANNELS}."
             )
-        if c is not None and c not in PHONE_CHANNELS:
-            raise ValueError(f"unknown channel {c!r}; expected 'none' or one of {PHONE_CHANNELS}")
+        if c is not None and c not in ALL_RECIPES:
+            raise ValueError(f"unknown channel {c!r}; expected 'none' or one of {ALL_RECIPES}")
         if c not in seen:
             seen.append(c)
 
@@ -111,3 +125,8 @@ def resolve_channels(
 def phone_subset(channels: Iterable[str | None]) -> list[str]:
     """The phone channels in `channels`, in order."""
     return [c for c in channels if c in PHONE_CHANNELS]
+
+
+def acoustic_subset(channels: Iterable[str | None]) -> list[str]:
+    """The acoustic channels in `channels`, in order (default: ("playback",))."""
+    return [c for c in channels if c in ACOUSTIC_CHANNELS]

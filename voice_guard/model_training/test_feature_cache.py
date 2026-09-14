@@ -51,13 +51,17 @@ def test_rebuild_is_a_no_op_and_stale_is_loud(tmp_path, monkeypatch):
     assert build_unit("t", specs, None, tmp_path / "cache", workers=1) == d
     assert (d / "seq.npy").stat().st_mtime == mtime
 
-    monkeypatch.setattr(feature_cache, "_FEATURE_VERSION", {"hash": "different", "components": {}})
+    # Make the recipe-scoped version hash different (this unit is undegraded ->
+    # key "none"), so both reads and rebuilds must refuse it until rebuilt.
+    feature_cache._VERSION_CACHE["none"] = {"hash": "different", "components": {}}
     with pytest.raises(StaleCacheError):
         CacheCollection([d])
     with pytest.raises(StaleCacheError):
         build_unit("t", specs, None, tmp_path / "cache", workers=1)
     d2 = build_unit("t", specs, None, tmp_path / "cache", workers=1, rebuild=True)
     assert CacheCollection([d2]).n == 6
+    # don't let the poisoned key leak: later tests need the real "none" hash
+    feature_cache._VERSION_CACHE.pop("none", None)
 
 
 def test_unit_dir_changes_with_file_list_channel_and_seed(tmp_path):
@@ -96,3 +100,65 @@ def test_feature_version_covers_features_dataset_and_telechannel():
     keys = " ".join(comps)
     for needle in ("features.py", "dataset.py", "channels.yaml", "pipeline.py", "codec.py", "ffmpeg"):
         assert needle in keys
+def test_recipe_scoped_version_ignores_unrelated_recipe_changes(monkeypatch):
+    """post-v12 plan step 3a: a change to one recipe must not bump the version
+    of every unit; only that recipe's own scope."""
+    base_whatsapp = feature_cache.feature_version("whatsapp", all_recipes=False)["hash"]
+    base_playback = feature_cache.feature_version("playback", all_recipes=False)["hash"]
+    assert base_whatsapp != base_playback
+
+    # simulate a change that touches ONLY the playback recipe (snr_db 12 -> 13)
+    cfg = feature_cache._channels_config()
+    cfg["recipes"]["playback"]["noise"]["snr_db"] = 13
+    cfg["recipes"]["playback"]["bandlimit"]["high_hz"] = 4000
+    monkeypatch.setattr(feature_cache, "_channels_config", lambda: cfg)
+    feature_cache._VERSION_CACHE.clear()
+
+    assert feature_cache.feature_version("whatsapp", all_recipes=False)["hash"] == base_whatsapp
+    assert feature_cache.feature_version("playback", all_recipes=False)["hash"] != base_playback
+
+
+def test_scoped_components_carry_the_recipe_but_not_other_recipes():
+    comps_wh = feature_cache.feature_version("whatsapp", all_recipes=False)["components"]
+    assert "channels.yaml[whatsapp]" in comps_wh
+    assert "channels.yaml[playback]" not in comps_wh and "channels.yaml[gsm_2g]" not in comps_wh
+    # undegraded carries no channel yaml scope at all
+    comps_none = feature_cache.feature_version(None, all_recipes=False)["components"]
+    assert all("channels.yaml[" not in k for k in comps_none)
+
+
+def test_revalidate_accepts_unchanged_unit(tmp_path):
+    specs = _corpus(tmp_path)
+    d = build_unit("t", specs, None, tmp_path / "cache", workers=1)
+    res = feature_cache.revalidate(d, max_sample_files=3)
+    assert res["equivalent"] is True
+    assert "restamped_to" in res
+    m = json.loads((d / "manifest.json").read_text())
+    assert m["feature_version"] == feature_cache.feature_version(None, all_recipes=False)["hash"]
+    assert "max_abs_diff" in m["revalidated_from"]
+
+
+def test_revalidate_detects_planted_change(tmp_path):
+    """A behavioral change to feature extraction must be detected by comparison,
+    not assumed equivalent."""
+    import dataset as ds
+
+    specs = _corpus(tmp_path)
+    d = build_unit("t", specs, None, tmp_path / "cache", workers=1)
+    assert feature_cache.revalidate(d, max_sample_files=3)["equivalent"] is True
+
+    orig = ds.extract_lfcc_sequence
+
+    def shifted(pcm):
+        return orig(pcm) + np.float32(5.0)
+
+    ds.extract_lfcc_sequence = shifted
+    try:
+        res = feature_cache.revalidate(d, max_sample_files=3)
+    finally:
+        ds.extract_lfcc_sequence = orig
+    assert res["equivalent"] is False
+    assert any(not v.get("equivalent") for v in res["per_file"].values())
+    # untouched by a failed revalidate: still flagged stale when the version no
+    # longer matches (here it still matches, but the file was NOT re-stamped)
+    assert "restamped_to" not in res

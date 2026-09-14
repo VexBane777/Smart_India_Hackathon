@@ -54,7 +54,7 @@ class _Coll:
         self.source_set = sets[file_set[f]]
         self.label = np.isin(self.source_set, ["itw_fake", "mlaad_fake"]).astype(np.int64)
         self.file_id = np.array([f"file{i}" for i in f])
-        self.channel = rng.choice(["none", "whatsapp", "pstn"], len(f))
+        self.channel = rng.choice(["none", "whatsapp", "pstn", "playback"], len(f))
         self.scalars = rng.normal(0, 1, (len(f), 6)).astype(np.float32)
         self.pad_fraction = np.where(rng.random(len(f)) < 0.3, 0.4, 0.0).astype(np.float32)
         self.n = len(f)
@@ -65,12 +65,18 @@ def test_evaluate_model_structure_and_headline_is_phone_pooled_core():
     rng = np.random.default_rng(2)
     p = 1 / (1 + np.exp(-(3 * (c.label - 0.5) + rng.normal(0, 1, c.n))))
     att = np.stack([np.full(c.n, 0.8), np.full(c.n, 0.2)], 1)
-    res = evaluate_model(p, att, c, 0.5, [None, "whatsapp", "pstn"], n_boot=20)
+    res = evaluate_model(p, att, c, 0.5, [None, "whatsapp", "pstn", "playback"], n_boot=20)
     h = res["headline"]
-    core_phone = np.isin(c.source_set, ["itw_real", "itw_fake", "noiseaug_real_en"]) & (c.channel != "none")
+    core_phone = (np.isin(c.source_set, ["itw_real", "itw_fake", "noiseaug_real_en"])
+                  & np.isin(c.channel, ["whatsapp", "pstn"]))
     assert h["n_windows"] == int(core_phone.sum())
     assert h["ci_lo"] <= h["eer"] <= h["ci_hi"]
-    assert set(res["per_channel"]) == {"none", "whatsapp", "pstn"}
+    assert set(res["per_channel"]) == {"none", "whatsapp", "pstn", "playback"}
     assert res["channel_groups"]["unseen_phone"]["channels"] == ["pstn"]
+    assert res["channel_groups"]["acoustic"]["channels"] == ["playback"]
     assert res["attack_mlaad"]["tts_share"] == 1.0
     assert "core_plus_mlaad" in res and res["per_set"]["itw_real"]["label"] == 0
+    # headline deliberately excludes the acoustic channel; the acoustic headline
+    # is a separate, deploy-gate block
+    core_acous = np.isin(c.source_set, ["itw_real", "itw_fake", "noiseaug_real_en"]) & (c.channel == "playback")
+    assert res["acoustic"]["n_windows"] == int(core_acous.sum())

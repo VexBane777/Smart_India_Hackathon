@@ -50,6 +50,7 @@ from dataset import (
     FileSpec,
     process_file,
     report_yield,
+    stable_seed,
 )
 from eval_protocol import channel_name
 from features import N_LFCC
@@ -101,31 +102,100 @@ def _ffmpeg_version() -> str:
         return "missing"
 
 
-_FEATURE_VERSION: dict | None = None
+_FEATURE_VERSION: dict | None = None  # legacy single-version cache, kept for tests
+_VERSION_CACHE: dict[str, dict] = {}
+_ALL_KEY = "<all-recipes>"
+_NONE_KEY = "none"
 
 
-def feature_version() -> dict:
-    """{"hash": ..., "components": {...}} over everything that shapes a window."""
-    global _FEATURE_VERSION
-    if _FEATURE_VERSION is not None:
-        return _FEATURE_VERSION
+
+def _json_bytes(obj) -> bytes:
+    """Canonical bytes for a parsed config subtree (sorted keys, compact)."""
+    return json.dumps(obj, sort_keys=True, ensure_ascii=False).encode()
+
+
+def _channels_config() -> dict:
+    import yaml
+
+    return yaml.safe_load((VAANI_ROOT / "telechannel" / "configs" / "channels.yaml").read_text(encoding="utf-8"))
+
+
+def _recipe_yaml_scope(recipe: str | None) -> dict | None:
+    """The parts of channels.yaml that process_clip actually consults for ONE
+    recipe: its own `recipes.<recipe>` block, the `rooms` entry(ies) its rir
+    references, plus shared sample_rate/version. `None` (undegraded) runs no
+    channel stages, so it returns None (no yaml consumed). Sorted-key JSON, so
+    a recipe edit that only reorders keys does not bump the hash."""
+    if recipe is None:
+        return None
+    cfg = _channels_config()
+    if recipe not in cfg.get("recipes", {}):
+        raise KeyError(f"unknown recipe {recipe!r}")
+    r = cfg["recipes"][recipe]
+    scope = {"sample_rate": cfg.get("sample_rate"), "version": cfg.get("version"),
+             "recipe": {recipe: r}}
+    room = (r.get("rir") or {}).get("room")
+    if room in cfg.get("rooms", {}):
+        scope["rooms"] = {room: cfg["rooms"][room]}
+    return scope
+
+
+def _version_common_components() -> dict:
+    """Code + runtime components shared by every recipe scope. YAML is added
+    per-scope: the whole file for the all-recipes version, just the recipe's
+    own subtree for a scoped one."""
     import librosa
     import soundfile
 
     tc = VAANI_ROOT / "telechannel"
     files = [MODEL_TRAINING_DIR / "features.py", MODEL_TRAINING_DIR / "dataset.py",
-             tc / "configs" / "channels.yaml", tc / "pipeline.py"] + sorted((tc / "stages").glob("*.py"))
-    components = {
+             tc / "pipeline.py"] + sorted((tc / "stages").glob("*.py"))
+    comps = {
         "cache_format": CACHE_FORMAT_VERSION,
         "numpy": np.__version__, "soundfile": soundfile.__version__, "librosa": librosa.__version__,
         "ffmpeg": _ffmpeg_version(),
     }
     for f in files:
         rel = f.relative_to(VAANI_ROOT.parent).as_posix() if VAANI_ROOT.parent in f.parents else f.name
-        components[rel] = hashlib.sha256(_code_fingerprint(f)).hexdigest()[:16]
-    h = hashlib.sha256(json.dumps(components, sort_keys=True).encode()).hexdigest()[:16]
-    _FEATURE_VERSION = {"hash": h, "components": components}
-    return _FEATURE_VERSION
+        comps[rel] = hashlib.sha256(_code_fingerprint(f)).hexdigest()[:16]
+    return comps
+
+def feature_version(recipe: str | None = None, all_recipes: bool = True) -> dict:
+    """Feature-version dict for a channel recipe's scope.
+
+    - `feature_version()` (no args, the default) hashes the UNION over every
+      recipe: whole channels.yaml + all code + the runtime. "Did anything
+      pipeline-shaped change". This is what tests probe and is the pre-v13
+      global-hash behavior.
+    - `feature_version(recipe, all_recipes=False)` hashes only that recipe's
+      scope: features.py + dataset.py + pipeline.py + stages + lib versions +
+      the recipe's OWN yaml block and the rooms entry(ies) it references.
+      **A change to one recipe must not invalidate every other unit** — that
+      false positive is a whole-corpus rebuild (98 eval + 32 train units,
+      hours) and is exactly the v13 post-v12 plan step 3. Docstring/comment
+      changes still hash to nothing (AST, docstrings stripped).
+
+    `recipe=None` (undegraded) runs no channel stages, so it hashes only the
+    code/runtime (no channel yaml).
+    """
+    key = _ALL_KEY if all_recipes else (_NONE_KEY if recipe is None else str(recipe))
+    cached = _VERSION_CACHE.get(key)
+    if cached is not None:
+        return cached
+    comps = _version_common_components()
+    if all_recipes:
+        comps["channels.yaml"] = hashlib.sha256(_json_bytes(_channels_config())).hexdigest()[:16]
+    else:
+        scope = _recipe_yaml_scope(recipe)
+        # undegraded (None) consumes no channel yaml: add no channels.yaml key
+        if scope is not None:
+            comps[f"channels.yaml[{key}]"] = hashlib.sha256(_json_bytes(scope)).hexdigest()[:16]
+    h = hashlib.sha256(json.dumps(comps, sort_keys=True).encode()).hexdigest()[:16]
+    ver = {"hash": h, "components": comps, "recipe": key}
+    _VERSION_CACHE[key] = ver
+    return ver
+
+
 
 
 def unit_key(specs: list[FileSpec], recipe: str | None, seed: int) -> str:
@@ -186,7 +256,7 @@ def build_unit(
     """Builds (or verifies) one cache unit and returns its directory."""
     d = unit_dir(cache_root, name, specs, recipe, seed)
     manifest_path = d / "manifest.json"
-    fv = feature_version()
+    fv = feature_version(recipe, all_recipes=False)
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text())
         if manifest.get("feature_version") == fv["hash"]:
@@ -269,6 +339,9 @@ def _consolidate(d: Path, tasks, summaries, specs, recipe, name, seed, fv) -> No
         "n_files_with_windows": sum(1 for v in status_by_file.values() if v == STATUS_OK),
         "yield": yield_report,
         "dropped_files": {fid: st for fid, st in status_by_file.items() if st != STATUS_OK},
+        # per-file pad policy: what revalidate() needs to re-render a sample
+        # with EXACTLY the same pad params (and thus the same windows).
+        "pad_policy": {s.file_id: [s.convert_prob, s.keep_short_prob] for s in specs},
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "first_spec": asdict(specs[0]) if specs else None,
     }
@@ -283,7 +356,6 @@ class CacheCollection:
 
     def __init__(self, dirs: list[Path], check_version: bool = True):
         self.dirs = [Path(d) for d in dirs]
-        fv = feature_version()["hash"] if check_version else None
         self._seqs, offsets, meta_parts, scalars = [], [0], {k: [] for k in META_FIELDS}, []
         self.manifests = []
         for d in self.dirs:
@@ -291,8 +363,17 @@ class CacheCollection:
             if not mp.exists():
                 raise FileNotFoundError(f"{d}: no manifest.json (unbuilt or interrupted cache unit)")
             manifest = json.loads(mp.read_text())
-            if check_version and manifest["feature_version"] != fv:
-                raise StaleCacheError(f"{d}: feature version {manifest['feature_version']} != current {fv}")
+            if check_version:
+                # Each unit's manifest is stamped with the feature version of
+                # ITS OWN recipe's scope (recipe-scoped invalidation), so a
+                # change to an unrelated recipe must not flag it stale.
+                ch = manifest.get("channel", "none")
+                recipe = None if ch == "none" else ch
+                fv = feature_version(recipe, all_recipes=False)["hash"]
+                if manifest.get("feature_version") != fv:
+                    raise StaleCacheError(
+                        f"{d}: feature version {manifest.get('feature_version')} != current {fv} "
+                        f"for recipe {recipe!r}")
             self.manifests.append(manifest)
             seq = np.load(d / "seq.npy", mmap_mode="r")
             self._seqs.append(seq)
@@ -334,3 +415,137 @@ class CacheCollection:
         for s in range(0, len(idx), batch):
             b = idx[s:s + batch]
             yield b, self.get_seq(b), self.scalars[b]
+# ---------------------------------------------------------------- revalidate
+
+def _reconstruct_specs_from_meta(unit_dir: Path, recipe: str | None) -> list:
+    """Rebuild the FileSpecs that produced a cache unit from its meta so a
+    sample can be re-rendered with EXACTLY the pad policy that was used.
+    Legacy units (built before `pad_policy` was stored) fall back to
+    recomputing the pad policy per source_set (best-effort; mis-derived params
+    make revalidate report not-equivalent, which is the safe outcome)."""
+    from dataset import DATA_ROOT, FileSpec, compute_pad_policy
+
+    with np.load(unit_dir / "meta.npz") as z:
+        fid = [str(x) for x in z["file_id"]]
+        label = [int(x) for x in z["label"]]
+        attack_type = [int(x) for x in z["attack_type"]]
+        attack_id = [int(x) for x in z["attack_id"]]
+        source_set = [str(x) for x in z["source_set"]]
+        duration = [float(x) for x in z["duration"]]
+    manifest = json.loads((unit_dir / "manifest.json").read_text())
+    pad_policy = manifest.get("pad_policy")
+
+    per = {}
+    first_dur = {}
+    for i, f in enumerate(fid):
+        per.setdefault(f, (label[i], attack_type[i], attack_id[i], source_set[i]))
+        first_dur.setdefault(f, duration[i])
+
+    order = sorted(set(fid), key=lambda k: fid.index(k))
+    specs_by_id = {}
+    for f in order:
+        lbl, at, aid, ss = per[f]
+        if pad_policy and f in pad_policy:
+            conv, keep = pad_policy[f]
+        else:
+            conv, keep = 0.0, 1.0  # default; recomputed below for legacy
+        specs_by_id[f] = FileSpec(
+            path=str(DATA_ROOT / f), file_id=f, label=lbl, source_set=ss,
+            attack_type=at, attack_id=aid,
+            convert_prob=conv, keep_short_prob=keep)
+
+    if not pad_policy:
+        by_set = {}
+        for s in specs_by_id.values():
+            by_set.setdefault(s.source_set, []).append(s)
+        for grp in by_set.values():
+            conv, keep, _frac = compute_pad_policy([first_dur[g.file_id] for g in grp])
+            for g in grp:
+                g.convert_prob = conv
+                g.keep_short_prob = keep
+    return [specs_by_id[f] for f in order]
+
+
+def revalidate(unit_dir_path, *, seed: int = 0, max_sample_files: int = 12,
+               rel_tol: float = 1e-2, atol: float = 1e-2, scalars_atol: float = 1e-3) -> dict:
+    """Re-render a deterministic sample of a stale cache unit under the current
+    code and compare it to the stored features.
+
+    Purpose (post-v12 plan step 3b): when a code change bumps `feature_version`,
+    decide between re-stamping the manifest (output truly unchanged) and a full
+    rebuild — by MEASUREMENT, not assumption. Re-renders a hash-selected,
+    deterministic sample of the unit's files with the SAME pad policy stored in
+    the manifest, and compares LFCC sequences (stored fp16) and scalars
+    (stored fp32) to freshly extracted ones within tolerance.
+
+    - equivalent=True  -> manifest re-stamped to the current recipe version,
+      recording `revalidated_from` (old hash, sample_n, max_abs_diff).
+    - equivalent=False -> unit left as-is (still stale); caller should rebuild.
+      Per-file max diffs are returned for diagnostics.
+    """
+    unit_dir_path = Path(unit_dir_path)
+    manifest_path = unit_dir_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    ch = manifest.get("channel", "none")
+    recipe = None if ch == "none" else ch
+    seed = int(manifest.get("seed", seed))
+
+    specs = _reconstruct_specs_from_meta(unit_dir_path, recipe)
+    with np.load(unit_dir_path / "meta.npz") as z:
+        fid = [str(x) for x in z["file_id"]]
+        win_idx = [int(x) for x in z["window_index"]]
+
+    stored_seq = np.load(unit_dir_path / "seq.npy", mmap_mode="r")
+    stored_scalars = np.load(unit_dir_path / "scalars.npy")
+
+    sample = sorted(specs, key=lambda s: (stable_seed(s.file_id, seed, "revalidate"), s.file_id))
+    sample = sorted(sample[:max_sample_files], key=lambda s: s.file_id)
+
+    max_abs_diff = 0.0
+    per_file = {}
+    for spec in sample:
+        windows, status, _dur = process_file(spec, recipe, seed)
+        if status != STATUS_OK:
+            per_file[spec.file_id] = {"status": status}
+            continue
+        rows = sorted([i for i, f in enumerate(fid) if f == spec.file_id], key=lambda i: win_idx[i])
+        if len(rows) != len(windows):
+            per_file[spec.file_id] = {"status": "window_count_mismatch",
+                                      "stored": len(rows), "fresh": len(windows)}
+            continue
+        ok, diff = _compare_windows(stored_seq[rows], stored_scalars[rows],
+                                    windows, rel_tol, atol, scalars_atol)
+        per_file[spec.file_id] = {"equivalent": bool(ok), "max_abs_diff": float(diff)}
+        max_abs_diff = max(max_abs_diff, float(diff))
+
+    equivalent = bool(sample) and all(v.get("equivalent") for v in per_file.values())
+    info = {"equivalent": equivalent, "sample_n": len(sample),
+            "max_abs_diff": float(max_abs_diff), "per_file": per_file, "recipe": recipe}
+
+    if equivalent:
+        old_hash = manifest.get("feature_version")
+        new_fv = feature_version(recipe, all_recipes=False)
+        manifest["feature_version"] = new_fv["hash"]
+        manifest["feature_version_components"] = new_fv["components"]
+        manifest["revalidated_from"] = {"old_hash": old_hash, "sample_n": len(sample),
+                                        "max_abs_diff": float(max_abs_diff)}
+        manifest_path.write_text(json.dumps(manifest, indent=1))
+        info["restamped_to"] = new_fv["hash"]
+    return info
+
+
+def _compare_windows(stored_seqs, stored_scalars, windows, rel_tol, atol, scalars_atol):
+    """Compare stored rows (already in window_index order) to freshly rendered
+    windows. Returns (all_ok, max_abs_diff)."""
+    import numpy as _np
+
+    diffs = []
+    for i, w in enumerate(windows):
+        fresh_fp16 = _np.asarray(w.lfcc_seq, dtype=_np.float16).astype(_np.float32)
+        seq_ok = _np.allclose(stored_seqs[i], fresh_fp16, rtol=rel_tol, atol=atol)
+        sc_ok = _np.allclose(stored_scalars[i], _np.asarray(w.scalars, dtype=_np.float32),
+                             atol=scalars_atol)
+        if not (seq_ok and sc_ok):
+            return False, float(_np.max(_np.abs(stored_seqs[i].astype(_np.float32) - fresh_fp16)))
+        diffs.append(float(_np.max(_np.abs(stored_seqs[i].astype(_np.float32) - fresh_fp16))))
+    return True, (max(diffs) if diffs else 0.0)

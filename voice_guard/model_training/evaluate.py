@@ -52,10 +52,12 @@ from pathlib import Path
 import numpy as np
 
 from eval_protocol import (
+    ACOUSTIC_CHANNELS,
     APPLICATIONS,
     PHONE_CHANNELS,
     TRAIN_PHONE_CHANNELS,
     UNSEEN_CHANNELS,
+    acoustic_subset,
     channel_name,
     phone_subset,
     resolve_channels,
@@ -194,7 +196,8 @@ def evaluate_model(p, att, coll, threshold, channels, n_boot) -> dict:
 
     core = np.isin(sset, CORE_EVAL_SETS)
     phone_ch = phone_subset(channels)
-    pooled_ch = phone_ch if phone_ch else ["none"]  # bank application: clean-only allowed
+    acous_ch = acoustic_subset(channels)
+    pooled_ch = phone_ch if phone_ch else ["none"]  # headline stays phone-pooled
     pooled = np.isin(ch, pooled_ch)
     m = core & pooled
     res = {"operating_threshold": float(threshold), "pooled_channels": pooled_ch}
@@ -208,9 +211,19 @@ def evaluate_model(p, att, coll, threshold, channels, n_boot) -> dict:
                                               "at_select_threshold": rates_at_threshold(p[mc], y[mc], threshold)}
     groups = {"seen_phone": [c for c in phone_ch if c in TRAIN_PHONE_CHANNELS],
               "unseen_phone": [c for c in phone_ch if c in UNSEEN_CHANNELS], "none_reference": ["none"]}
+    if acous_ch:
+        groups["acoustic"] = acous_ch
     res["channel_groups"] = {g: {"channels": cs, **_eer_block(p[core & np.isin(ch, cs)], y[core & np.isin(ch, cs)],
                                                               fid[core & np.isin(ch, cs)], 0)}
                              for g, cs in groups.items() if cs}
+    # Acoustic headline (playback loop) on the core sets: the subject of the
+    # pre-registered acoustic deploy gate (candidate must beat the reference).
+    # Deliberately NOT folded into the phone headline or the confound pool.
+    if acous_ch:
+        am = core & np.isin(ch, acous_ch)
+        res["acoustic"] = {"channels": acous_ch, **_eer_block(p[am], y[am], fid[am], n_boot),
+                           "at_select_threshold": rates_at_threshold(p[am], y[am], threshold),
+                           "at_app_threshold": rates_at_threshold(p[am], y[am], APP_THRESHOLD)}
     padded = m & (coll.pad_fraction > 0)
     res["padded_windows_only"] = {**_eer_block(p[padded], y[padded], fid[padded], 0),
                                   "share_of_pooled_windows": float(padded.sum() / max(m.sum(), 1))}
@@ -305,7 +318,16 @@ def write_markdown(report: dict, path: Path) -> None:
           "| channel | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
     for c in report["channels"]:
         L.append(f"| {c} | " + " | ".join(_fmt(M[n]["per_channel"][c]["eer"]) for n in names) + " |")
-    for g in ("seen_phone", "unseen_phone", "none_reference"):
+    if "acoustic" in M[names[0]]:
+        L += ["", "## Acoustic headline (playback loop, core sets)", "",
+              "| model | EER | 95% CI (file bootstrap) | FPR @thr | FNR @thr | FPR @0.60 | FNR @0.60 |",
+              "|---|---|---|---|---|---|---|"]
+        for n in names:
+            a = M[n]["acoustic"]
+            L.append(f"| {n} | {_fmt(a['eer'])} | [{_fmt(a.get('ci_lo'))}, {_fmt(a.get('ci_hi'))}] | "
+                     f"{_fmt(a['at_select_threshold']['fpr'], True)} | {_fmt(a['at_select_threshold']['fnr'], True)} | "
+                     f"{_fmt(a['at_app_threshold']['fpr'], True)} | {_fmt(a['at_app_threshold']['fnr'], True)} |")
+    for g in ("seen_phone", "unseen_phone", "acoustic", "none_reference"):
         if g in M[names[0]]["channel_groups"]:
             L.append(f"| **{g}** | " + " | ".join(_fmt(M[n]["channel_groups"][g]["eer"]) for n in names) + " |")
     L.append("| **padded windows only** | " + " | ".join(_fmt(M[n]["padded_windows_only"]["eer"]) for n in names) + " |")
@@ -372,7 +394,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", action="append", required=True, help="NAME=path/to/model.pt (repeatable)")
     ap.add_argument("--split", default="test", choices=["test", "select"])
-    ap.add_argument("--channels", nargs="*", default=None, help="default: none + all phone channels")
+    ap.add_argument("--channels", nargs="*", default=None, help="default: none + every phone and acoustic channel")
     ap.add_argument("--application", default="phone", choices=APPLICATIONS)
     ap.add_argument("--cache-root", type=Path, default=None)
     ap.add_argument("--out", type=Path, required=True)
@@ -452,6 +474,19 @@ def main() -> None:
             "beats reference on test headline EER": f"{better} ({c['headline']['eer']:.4f} vs {r['headline']['eer']:.4f}; "
                                                    f"CIs {'overlap' if overlap else 'do not overlap'})",
         }
+        # Acoustic deploy gate, pre-registered in EVAL-PROTOCOL.md §6 BEFORE any
+        # model was scored on the acoustic group: the candidate's playback EER
+        # (test, file-bootstrap CI) must beat the deployed reference's.
+        acoust = None
+        if "acoustic" in c and "acoustic" in r:
+            ce, re_ = c["acoustic"]["eer"], r["acoustic"]["eer"]
+            a_better = ce < re_
+            a_overlap = cis_overlap({"ci_lo": c["acoustic"].get("ci_lo"), "ci_hi": c["acoustic"].get("ci_hi")},
+                                    {"ci_lo": r["acoustic"].get("ci_lo"), "ci_hi": r["acoustic"].get("ci_hi")})
+            acoust = {"candidate_eer": ce, "reference_eer": re_, "beats_reference": bool(a_better),
+                      "ci_overlap": bool(a_overlap)}
+            dec["acoustic gate (playback EER beats reference)"] = (
+                f"{a_better} ({ce:.4f} vs {re_:.4f}; CIs {'overlap' if a_overlap else 'do not overlap'})")
         am = c.get("attack_mlaad")
         lo = report.get("attack_val", {}).get("models", {}).get(args.candidate, {}).get("leave_attack_out", {})
         if am is not None:
@@ -461,7 +496,8 @@ def main() -> None:
                 f"vs >= {ATTACK_LEAVE_OUT_BACC_GATE}; MLAAD tts share {_fmt(am['tts_share'], True)} vs >= "
                 f"{ATTACK_MLAAD_TTS_GATE:.0%})")
             dec["attack_head_ok"] = bool(a_ok)
-        dec["deploy"] = bool(conf["passed"] and better)
+        dec["acoustic_gate_ok"] = bool(acoust and acoust["beats_reference"])
+        dec["deploy"] = bool(conf["passed"] and better and (not acoust or acoust["beats_reference"]))
         report["decision"] = dec
 
     args.out.mkdir(parents=True, exist_ok=True)

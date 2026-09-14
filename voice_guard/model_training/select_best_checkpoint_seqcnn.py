@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval_protocol import APPLICATIONS, channel_name, resolve_channels
+from eval_protocol import APPLICATIONS, channel_name, resolve_channels, acoustic_subset
 from eval_stats import compute_eer
 
 SPLIT = "select"  # the only split this script may read
@@ -47,6 +47,11 @@ def main() -> None:
 
     channels = resolve_channels(args.channels, args.application, "eval")
     phone = [c for c in channels if c is not None]
+    acous = acoustic_subset(channels)
+    # v13 pre-registered selection objective: EER pooled over phone + acoustic
+    # channels (the acoustic loop is a deploy gate now, so selection must care
+    # about it, not just phone). Phone-only EER is kept as a diagnostic row.
+    pool = phone + acous
     device = ("cuda" if torch.cuda.is_available() else "cpu") if args.device == "auto" else args.device
     checkpoints = sorted((args.run / "checkpoints").glob("epoch_*.pt"))
     if not checkpoints:
@@ -56,23 +61,28 @@ def main() -> None:
     coll = load_eval_collection(SPLIT, channels, args.cache_root or default_cache_root(),
                                 set_names=CORE_EVAL_SETS, workers=args.workers)
     idx = np.arange(coll.n)
+    pool_mask = np.isin(coll.channel, pool)
     phone_mask = np.isin(coll.channel, phone)
-    print(f"{coll.n} {SPLIT}-split windows ({int(phone_mask.sum())} phone) from {len(set(coll.file_id))} files")
+    print(f"{coll.n} {SPLIT}-split windows ({int(pool_mask.sum())} phone+acoustic, "
+          f"{int(phone_mask.sum())} phone) from {len(set(coll.file_id))} files")
 
     sweep = {}
     for ckpt in checkpoints:
         model = build_model_from_norm_stats(norm_stats)
         model.load_state_dict(torch.load(ckpt, map_location="cpu", weights_only=True))
         p, _att = score(model.to(device), coll, idx, device)
-        row = {"phone_pooled_eer": compute_eer(p[phone_mask], coll.label[phone_mask])}
+        row = {"pooled_eer": compute_eer(p[pool_mask], coll.label[pool_mask]),
+               "phone_eer": compute_eer(p[phone_mask], coll.label[phone_mask])}
         for c in channels:
-            m = coll.channel == channel_name(c)
-            row[f"eer_{channel_name(c)}"] = compute_eer(p[m], coll.label[m])
+            mm = coll.channel == channel_name(c)
+            row[f"eer_{channel_name(c)}"] = compute_eer(p[mm], coll.label[mm])
         sweep[ckpt.name] = row
-        print(f"  {ckpt.name}: phone-pooled EER={row['phone_pooled_eer']:.4f}  none={row['eer_none']:.4f}")
+        print(f"  {ckpt.name}: pooled EER={row['pooled_eer']:.4f}  phone={row['phone_eer']:.4f}  "
+              f"none={row['eer_none']:.4f}")
 
-    best = min(sweep, key=lambda k: sweep[k]["phone_pooled_eer"])
-    print(f"\nBest on {SPLIT}: {best}  phone-pooled EER={sweep[best]['phone_pooled_eer']:.4f}")
+    best = min(sweep, key=lambda k: sweep[k]["pooled_eer"])
+    print(f"\nBest on {SPLIT}: {best}  pooled EER (phone+acoustic)={sweep[best]['pooled_eer']:.4f}  "
+          f"phone={sweep[best]['phone_eer']:.4f}")
     args.out.mkdir(parents=True, exist_ok=True)
     shutil.copy2(args.run / "checkpoints" / best, args.out / "model.pt")
     np.savez(args.out / "norm_stats.npz", **norm_stats)
@@ -80,7 +90,7 @@ def main() -> None:
     model.load_state_dict(torch.load(args.out / "model.pt", map_location="cpu", weights_only=True))
     export_onnx(model, args.out / "model.onnx")
     (args.out / "checkpoint_sweep.json").write_text(json.dumps({
-        "split": SPLIT, "metric": "phone_pooled_eer over core eval sets",
+        "split": SPLIT, "metric": "pooled_eer over phone+acoustic core eval sets (v13, pre-registered)",
         "channels": [channel_name(c) for c in channels], "best_checkpoint": best,
         "best": sweep[best], "all": sweep, "source_run": str(args.run),
     }, indent=1))
