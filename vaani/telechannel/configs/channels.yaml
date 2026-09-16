@@ -127,6 +127,45 @@ recipes:
     loss: { p_gb: 0.0, p_bg: 0.0 }
     bandlimit: { enabled: true, low_hz: 200, high_hz: 3800 }
 
+  # --- Room/loudspeaker renditions: TRAINING-ONLY (rework axis D4) ------------
+  # Same codec/loss chain as their base recipe, plus the acoustic-loop
+  # artifacts: far room (RT60 600 ms, wet 0.6), louder pink noise (12 dB), mic
+  # headroom clipping (0.3) and a small-speaker+phone-mic passband
+  # (200-3800 Hz). Real users re-play a clip into a call from a laptop speaker
+  # or a second phone held to the mic, so the codec-only recipes above do not
+  # cover a common scam setup.
+  #
+  # These are SEPARATE recipe names on purpose. whatsapp/volte/cellular_3g are
+  # the frozen eval recipes (editing their YAML would re-version and silently
+  # invalidate every cached rendition and comparison); these are only ever added
+  # as extra training renditions by corpus.training_units(room_fraction=...),
+  # and eval_protocol.resolve_channels refuses to take one as an eval channel.
+  whatsapp_room:
+    rir: { room: far, wet_gain: 0.6 }
+    noise: { type: pink, snr_db: 12 }
+    mic: { clip_prob: 0.3 }
+    codec:
+      - { codec: libopus, bitrate: "16k" }
+    loss: { p_gb: 0.06, p_bg: 0.20 }
+    bandlimit: { enabled: true, low_hz: 200, high_hz: 3800 }
+
+  volte_room:
+    rir: { room: far, wet_gain: 0.6 }
+    noise: { type: pink, snr_db: 12 }
+    mic: { clip_prob: 0.3 }
+    codec:
+      - { codec: libvo_amrwbenc, bitrate: "23.85k" }
+    loss: { p_gb: 0.01, p_bg: 0.40 }
+    bandlimit: { enabled: true, low_hz: 200, high_hz: 3800 }
+
+  cellular_3g_room:
+    rir: { room: far, wet_gain: 0.6 }
+    noise: { type: pink, snr_db: 12 }
+    mic: { clip_prob: 0.3 }
+    codec:
+      - { codec: libopencore_amrnb, bitrate: "7.4k" }
+    loss: { p_gb: 0.04, p_bg: 0.30 }
+    bandlimit: { enabled: true, low_hz: 200, high_hz: 3800 }
   # Tandem/cross-network transcoding: two codec round-trips in sequence
   # (AMR-NB then G.711 mu-law), simulating a call that crosses two networks
   # and gets transcoded at the gateway between them.

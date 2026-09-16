@@ -42,6 +42,16 @@ ACOUSTIC_CHANNELS: tuple[str, ...] = ("playback",)
 # footprint.
 ALL_RECIPES: tuple[str, ...] = PHONE_CHANNELS + ACOUSTIC_CHANNELS
 
+# Room/loudspeaker training renditions (post-v13 rework axis D4): a phone
+# recipe plus the acoustic-loop artifacts (far room, pink noise, mic clipping,
+# speaker+mic passband) -- the "clip replayed into the call" setup. These are
+# DELIBERATELY NOT in ALL_RECIPES: ALL_RECIPES is the frozen eval footprint, so
+# existing caches and every recorded comparison stay valid. They exist only as
+# extra TRAINING renditions, added by
+# `corpus.training_units(room_fraction=...)`, and resolve_channels refuses to
+# accept one as an eval channel.
+TRAIN_ROOM_CHANNELS: tuple[str, ...] = ("whatsapp_room", "volte_room", "cellular_3g_room")
+
 # Training sees `none` plus these three. The other three phone channels are
 # never trained on, so they form the "unseen channel" eval group. The acoustic
 # group is intentionally NOT here: playback is added as a separate hash-selected
@@ -108,6 +118,13 @@ def resolve_channels(
                 f"for undegraded audio or one of {PHONE_CHANNELS}."
             )
         if c is not None and c not in ALL_RECIPES:
+            if c in TRAIN_ROOM_CHANNELS:
+                raise ValueError(
+                    f"channel {c!r} is a training-only room/loudspeaker rendition (axis D4). It is "
+                    "added as an extra training rendition by "
+                    "corpus.training_units(room_fraction=...); it must never be an eval channel "
+                    "(the eval footprint ALL_RECIPES is frozen, so recorded comparisons stay valid)."
+                )
             raise ValueError(f"unknown channel {c!r}; expected 'none' or one of {ALL_RECIPES}")
         if c not in seen:
             seen.append(c)
@@ -130,3 +147,8 @@ def phone_subset(channels: Iterable[str | None]) -> list[str]:
 def acoustic_subset(channels: Iterable[str | None]) -> list[str]:
     """The acoustic channels in `channels`, in order (default: ("playback",))."""
     return [c for c in channels if c in ACOUSTIC_CHANNELS]
+
+
+def room_subset(channels: Iterable[str | None]) -> list[str]:
+    """The training-only room renditions in `channels`, in order (axis D4)."""
+    return [c for c in channels if c in TRAIN_ROOM_CHANNELS]

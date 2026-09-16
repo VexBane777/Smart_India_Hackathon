@@ -12,6 +12,14 @@ hash-selected ~50% of files (corpus.training_units, `stable_unit(...,
 "playback") < 0.5`). Short-clip padding is balanced per set
 (dataset.compute_pad_policy).
 
+Post-v13 rework additions to `training_units`, both default-OFF so the v13
+recipe is unchanged:
+- `playback_fraction` is now a real fold: 0.5 (v13), 1.0 = every file also gets
+  a playback rendition, 0.0 = no playback unit at all;
+- `room_fraction` (axis D4): a further rendition through one of
+  TRAIN_ROOM_CHANNELS (whatsapp_room/volte_room/cellular_3g_room -- a phone
+  codec plus far room, pink noise, mic clipping and a speaker+mic passband).
+
 Eval sets come from the committed split manifest
 (`eval_splits/held_out_split_v1.json`, written by make_eval_splits.py), so
 no script can accidentally evaluate on files that aren't in it, or pick
@@ -26,7 +34,7 @@ from pathlib import Path
 import soundfile as sf
 
 from dataset import DATA_ROOT, FileSpec, compute_pad_policy, make_file_specs, stable_seed, stable_unit
-from eval_protocol import TRAIN_PHONE_CHANNELS
+from eval_protocol import TRAIN_PHONE_CHANNELS, TRAIN_ROOM_CHANNELS
 
 MODEL_TRAINING_DIR = Path(__file__).resolve().parent
 SPLIT_MANIFEST = MODEL_TRAINING_DIR / "eval_splits" / "held_out_split_v1.json"
@@ -145,23 +153,51 @@ def training_specs(
     return out
 
 
+def channel_from(file_id: str, channels: tuple[str, ...], tag: str, seed: int = 0) -> str:
+    """The recipe `file_id` renders through, chosen by a stable hash. `tag`
+    namespaces the draw, so the phone rendition and the room rendition of one
+    file are independent and never correlated by accident."""
+    return channels[stable_seed(file_id, seed, tag) % len(channels)]
+
+
 def train_phone_channel_from(file_id: str, phone_channels: tuple[str, ...], seed: int = 0) -> str:
-    return phone_channels[stable_seed(file_id, seed, "train_channel") % len(phone_channels)]
+    # tag "train_channel" is load-bearing: it decides which unit every cached
+    # phone rendition lives in, so changing it rebaselines the whole cache.
+    return channel_from(file_id, phone_channels, "train_channel", seed)
+
+
+def room_channel_from(file_id: str, room_channels: tuple[str, ...], seed: int = 0) -> str:
+    """The room/loudspeaker recipe `file_id` renders through (axis D4)."""
+    return channel_from(file_id, room_channels, "room_channel", seed)
 
 
 def training_units(
     specs_by_set: dict[str, list[FileSpec]], seed: int = 0,
     channels: tuple[str | None, ...] | None = None,
-    playback_fraction: float = 0.5) -> list[tuple[str, list[FileSpec], str | None]]:
+    playback_fraction: float = 0.5,
+    room_fraction: float = 0.0,
+    room_channels: tuple[str, ...] | None = None) -> list[tuple[str, list[FileSpec], str | None]]:
     """(unit name, specs, recipe) for every training rendition: each set
     once with `none` (if in `channels`), each file once more through ONE
     phone channel from `channels` chosen by file hash, plus (v13) a third
     `playback` rendition for a hash-selected `playback_fraction` (~50%) of
     files so the model learns the acoustic-loudspeaker->mic loop as a
     fake-presenting channel. Default channels: TRAIN_CHANNELS (+ acoustic
-    playback rendition always, since it is now part of the v13 recipe)."""
+    playback rendition always, since it is now part of the v13 recipe).
+
+    `playback_fraction` (rework-axis toggle): 0.0 adds no playback unit at all,
+    0.5 is the pre-registered v13 recipe, 1.0 is the full fold -- EVERY training
+    file also gets a playback rendition.
+
+    `room_fraction` (axis D4, default 0.0 = off): a further rendition through
+    ONE of `room_channels` (default TRAIN_ROOM_CHANNELS: whatsapp_room /
+    volte_room / cellular_3g_room) for that fraction of files, so the model sees
+    the codec rendered through a room + loudspeaker + phone mic. Each selected
+    file lands in exactly one room unit (the recipe's own unit key), so the
+    cache stays one unit per recipe."""
     channels = tuple(channels) if channels is not None else (None,) + TRAIN_PHONE_CHANNELS
     phone = tuple(c for c in channels if c is not None)
+    room_channels = tuple(room_channels) if room_channels is not None else TRAIN_ROOM_CHANNELS
     units = []
     for name, specs in specs_by_set.items():
         if None in channels:
@@ -171,10 +207,19 @@ def training_units(
             if sub:
                 units.append((f"train_{name}", sub, ch))
         # v13: playback rendition for a deterministic subset (stable_unit, so
-        # the same ~50% every run regardless of file order).
+        # the same subset every run regardless of file order). playback_fraction
+        # 1.0 = every file; 0.0 = the rendition is skipped entirely.
         pb = [s for s in specs if stable_unit(s.file_id, seed, "playback") < playback_fraction]
         if pb:
             units.append((f"train_{name}", pb, "playback"))
+        # D4: room/loudspeaker renditions, one recipe per selected file
+        if room_fraction > 0:
+            for ch in room_channels:
+                sub = [s for s in specs
+                       if stable_unit(s.file_id, seed, "room") < room_fraction
+                       and room_channel_from(s.file_id, room_channels, seed) == ch]
+                if sub:
+                    units.append((f"train_{name}", sub, ch))
     return units
 
 
