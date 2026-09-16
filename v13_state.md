@@ -18,6 +18,31 @@ It also never saw the new `playback` (acoustic loop) channel, so it cannot meet
 the new playback deploy gate. **v13 = v12's recipe + a playback rendition +
 fake-side confound remediation**, gated by all four criteria.
 
+## v13 RESULT (2026-09-14) — trained, NOT deployed
+
+- Ran end to end via `v13_stageB_train_eval.cmd` (log
+  `model_training/runs/v13_stageB_train_eval.log`): 30 epochs ->
+  `runs/voice_guard_v13`, selected `epoch_06.pt` -> `runs/voice_guard_v13_selected`,
+  fp16 storage validation PASS, report `model_training/runs/eval_v13_test/report.md`.
+- **Gate scorecard** (all four criteria, from that report):
+  - phone headline **PASS** — EER 0.3149 [0.3050, 0.3250] vs v11 0.4853
+    [0.4766, 0.4939], CIs disjoint;
+  - acoustic/playback headline **PASS** — 0.2755 [0.2582, 0.2934] vs v11 0.4925
+    (the new playback channel worked: 0.4925 -> 0.2755);
+  - attack-head gates **PASS** — leave-attack-out balanced acc 0.750 (>= 0.70),
+    MLAAD tts share 76.6% (>= 70%);
+  - **confound gates FAIL** — 9 of 14 rows (real: zcrVariance/shimmer/hnr_db;
+    fake: energyVariance/zcrVariance/jitter/shimmer/hnr_db/pad_fraction;
+    fake zcrVariance rate ratio 3.91, jitter 2.72, hnr_db 2.27);
+  - **playback-loop gate FAIL** — `tts_elevenlabs_sample.wav` speaker->mic loop
+    0.248 < 0.50 (clean 0.642, already near the 0.60 clean gate; the other three
+    assets pass).
+  - => `deploy: False`. The fake-side **style confound is still the blocker** and
+    the acoustic loop still collapses for at least one real TTS sample; v11 stays
+    deployed.
+- Open items unaffected by this run: unseen-channel generalization
+  (gsm_2g 0.4364), accent cells at chance (en_native 0.4879, hi_native 0.5142).
+
 ## Working set
 - Branch: `vaani` (this repo). v13 protocol commits: `e2d6874` (acoustic
   group, scoped caches, playback rendition, selection objective,
@@ -61,10 +86,23 @@ Steps from `2026-09-12-post-v12-plan.md`:
       (staged: `v13_stageB_train_eval.cmd` waits on stage A, then
       train -> select -> fp16 validate -> evaluate (all four gates) ->
       playback-loop ONNX gate.)
-- [ ] 8. v13 deploy decision (all four gates); then message UI session before
-      copying to `assets/models/voice_detector.onnx`.
+- [x] 8. v13 deploy decision -> **NOT deployed** (`deploy: False`, 2026-09-14):
+      confound gates fail 9/14 and the playback-loop gate fails on
+      `tts_elevenlabs_sample.wav` (0.248 < 0.50). v11 stays deployed.
 - [ ] 9. On-device verification (Test-with-audio-file + Live Mic loop), record
-      in state.md.
+      in state.md. (Deferred: nothing new ships until a candidate clears all four
+      gates.)
+- [~] 10. **Post-v13 rework** (plan
+      `model_training/docs/2026-09-training-improvement-plan.md`, second pass
+      2026-09-16): axes B/G (capacity + stochastic depth/CMVN/SE, all persisted in
+      `norm_stats.npz`), F/D3 (focal loss, attack-head warmup, Mixup,
+      SpecAugment), D1/H (channel-balanced selection objective + attack-head
+      floor), plus the earlier min-LR hold/grad clip/stability tolerance. The
+      worktree was found mid-edit and syntactically broken and was repaired
+      first. **Remaining:** actually launch the rework candidate
+      (`runs/voice_guard_v13x`, §9 of the plan) and score it against all four
+      gates; then multi-seed (H), data work (D2/D4/D5), calibration/ensembling
+      (I/K), and the dilation-32/Conformer comparison (C/4).
 
 
 ## Run (v13) — runbook
@@ -92,7 +130,40 @@ v13 ships only if it clears **all four**: (1) every confound gate,
 (2) beats reference test headline EER, (3) beats reference acoustic EER,
 (4) both `eval_playback_loop.py` gates.
 
+## Run (post-v13 rework candidate) — runbook
+
+Full command block, per-axis rationale and the expected runtime cost live in
+`model_training/docs/2026-09-training-improvement-plan.md` §9. The short form
+(every lever is independent and default-OFF):
+
+```bash
+cd voice_guard/model_training
+PY=.venv313/Scripts/python.exe
+$PY train_seq_cnn.py --out runs/voice_guard_v13x \
+    --epochs 40 --min-lr-epochs 10 --grad-clip 1.0 \
+    --model-channels 96 --model-dilations 1,2,4,8,16,32 --model-hidden 96 \
+    --model-dropout 0.15 --model-stochastic-depth 0.1 --model-cmvn \
+    --focal-gamma 1.5 --attack-type-warmup-epochs 3 --mixup-alpha 0.2 \
+    --specaugment-freq-masks 2 --specaugment-time-masks 2
+$PY select_best_checkpoint_seqcnn.py --run runs/voice_guard_v13x \
+    --out runs/voice_guard_v13x_selected --stability-tolerance 0.005 \
+    --metric channel_balanced --min-attack-bacc 0.75
+# then the same four gates as v13: validate_fp16.py -> evaluate.py --split test
+# -> eval_playback_loop.py (see the v13 runbook above; swap in the v13x paths).
+```
+
 ## Known open items / notes
+
+- **Test status this session (post-v13 rework, 2026-09-16):** 48 green on
+  `eval_protocol`/`feature_cache`/`eval_stats`/`attack_labels`; 29 passed + 1 skipped
+  on `model`+`select_best_checkpoint_seqcnn` (the skip is the retired v9 checkpoint
+  that is no longer on disk; **v12 and v13 checkpoints both load**, so the new
+  default model kwargs are backward compatible with them); 35 on
+  `evaluate`/`eval_stats`/`eval_protocol`; 16 on `train_seq_cnn`, including a new
+  end-to-end run that exercises every new flag and re-loads its checkpoint through
+  `norm_stats.npz`. Use `model_training/_rework_tests.cmd` (detached) for the whole
+  set, and `model_training/runs/_rework_tests.log` for the result: this shell caps
+  a command at 30 s and the trainer tests spawn real trainings.
 - **Test status this session (v13 protocol work):** 48 green on the fast files
   (`eval_protocol`/`feature_cache`/`eval_stats`/`attack_labels`), 21 on
   `evaluate`/`model`/`train_seq_cnn`, then `evaluate`+`features` (12),

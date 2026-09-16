@@ -126,16 +126,63 @@ class VoiceGuardSeqCNN(nn.Module):
         return self.real_fake_head(trunk_out), self.attack_type_head(trunk_out)
 
 
+class _SqueezeExcite(nn.Module):
+    """Channel attention (SE): global-avg-pool -> 1x1 bottleneck -> sigmoid gate.
+
+    Implemented with kernel-size-1 Conv1d so it maps cleanly to ONNX ops (no
+    flatten/unsqueeze tricks). Adds ~2*C*C/reduction params.
+    """
+
+    def __init__(self, channels: int, reduction: int = 8):
+        super().__init__()
+        hidden = max(4, channels // reduction)
+        self.fc1 = nn.Conv1d(channels, hidden, kernel_size=1)
+        self.fc2 = nn.Conv1d(hidden, channels, kernel_size=1)
+        self.act = nn.ReLU()
+        self.gate = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        s = self.gate(self.fc2(self.act(self.fc1(x.mean(dim=2, keepdim=True)))))
+        return x * s
+
+
 class _ResidualBlock(nn.Module):
-    def __init__(self, channels: int, dilation: int, dropout: float):
+    def __init__(self, channels: int, dilation: int, dropout: float,
+                 stochastic_depth: float = 0.0, se: bool = False):
         super().__init__()
         self.conv = nn.Conv1d(channels, channels, kernel_size=3, dilation=dilation, padding=dilation)
         self.bn = nn.BatchNorm1d(channels)
         self.act = nn.ReLU()
         self.drop = nn.Dropout(dropout)
+        self.se = _SqueezeExcite(channels) if se else None
+        # per-block drop probability (the caller ramps it with depth); eval takes the
+        # identity path, so an exported graph never sees the mask
+        self.stochastic_depth = float(stochastic_depth)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.drop(self.act(self.bn(self.conv(x))))
+        h = self.act(self.bn(self.conv(x)))
+        if self.se is not None:
+            h = self.se(h)
+        h = self.drop(h)
+        if self.training and self.stochastic_depth > 0.0:
+            keep = 1.0 - self.stochastic_depth
+            mask = torch.empty(x.shape[0], 1, 1, dtype=h.dtype, device=h.device).bernoulli_(keep)
+            h = h * mask / keep  # survival scaling keeps E[h] unchanged
+        return x + h
+
+
+def per_utterance_cmvn(seq: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+    """Per-utterance, per-coefficient zero-mean/unit-variance on (B, T, C).
+
+    Removes the level/coloration differences an unseen channel or a speaker->mic
+    loop imposes, which the confound analysis (`docs/CRITICAL-entity-vs-style-confound.md`)
+    identifies as the cue the model keys on instead of speaker identity. Fully
+    deterministic, so it is identical in PyTorch and ONNX.
+    """
+    mean = seq.mean(dim=1, keepdim=True)
+    var = ((seq - mean) ** 2).mean(dim=1, keepdim=True)
+    return (seq - mean) / torch.sqrt(var + eps)
+
 
 
 class VoiceGuardSeqTCN(nn.Module):
@@ -143,18 +190,34 @@ class VoiceGuardSeqTCN(nn.Module):
     blocks Conv1d(64, k3, dilation 1/2/4/8/16)+BN+ReLU+Dropout, then
     mean+std+max pooling concatenated with normalized scalars ->
     Linear 64 + ReLU + Dropout -> real/fake and attack-type heads.
-    Receptive field 1 + 2*(1+1+2+4+8+16) = 65 frames (~1.1 s)."""
+    Receptive field 1 + 2*(1+1+2+4+8+16) = 65 frames (~1.1 s).
+
+    Capacity/regularization kwargs (all persisted in norm_stats.npz by
+    train_seq_cnn.py and read back by build_model_from_norm_stats, so a
+    checkpoint always rebuilds the architecture it was trained with):
+      channels, dilations, hidden, dropout  -- size (post-v13 rework axis B)
+      stochastic_depth, cmvn, se            -- paired regularization (axis G)
+    Defaults reproduce the v12/v13 architecture bit-for-bit.
+    """
 
     def __init__(self, n_lfcc: int, n_scalars: int, seq_mean: np.ndarray, seq_std: np.ndarray,
                  scalar_mean: np.ndarray, scalar_std: np.ndarray, channels: int = 64,
                  dilations: tuple[int, ...] = (1, 2, 4, 8, 16), dropout: float = 0.1, hidden: int = 64,
+                 stochastic_depth: float = 0.0, cmvn: bool = False, se: bool = False,
                  num_classes: int = 2):
         super().__init__()
         self.seq_normalize = FixedNormalizeSeq(seq_mean, seq_std)
         self.scalar_normalize = FixedNormalize(scalar_mean, scalar_std)
+        self.cmvn = bool(cmvn)
         self.stem = nn.Sequential(nn.Conv1d(n_lfcc, channels, kernel_size=3, padding=1),
                                   nn.BatchNorm1d(channels), nn.ReLU())
-        self.blocks = nn.Sequential(*[_ResidualBlock(channels, d, dropout) for d in dilations])
+        # linear (dense) stochastic-depth rule from the paper: block l of L gets
+        # p_l = p * (l + 1) / L, so shallow blocks are rarely skipped
+        n_blocks = len(dilations)
+        self.blocks = nn.Sequential(*[
+            _ResidualBlock(channels, d, dropout,
+                           stochastic_depth=stochastic_depth * (i + 1) / n_blocks, se=se)
+            for i, d in enumerate(dilations)])
         self.trunk = nn.Sequential(nn.Linear(3 * channels + n_scalars, hidden), nn.ReLU(), nn.Dropout(dropout))
         self.real_fake_head = nn.Linear(hidden, num_classes)
         self.attack_type_head = nn.Linear(hidden, num_classes)
@@ -163,8 +226,13 @@ class VoiceGuardSeqTCN(nn.Module):
     def receptive_field(dilations: tuple[int, ...] = (1, 2, 4, 8, 16)) -> int:
         return 1 + 2 * (1 + sum(dilations))
 
+    def normalize_sequence(self, seq: torch.Tensor) -> torch.Tensor:
+        """(B, T, C): sequence normalization (and optional in-graph CMVN)."""
+        x = self.seq_normalize(seq)
+        return per_utterance_cmvn(x) if self.cmvn else x
+
     def forward(self, seq: torch.Tensor, scalars: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        h = self.blocks(self.stem(self.seq_normalize(seq).transpose(1, 2)))
+        h = self.blocks(self.stem(self.normalize_sequence(seq).transpose(1, 2)))
         mean = h.mean(dim=2)
         std = torch.sqrt(((h - mean.unsqueeze(2)) ** 2).mean(dim=2) + 1e-5)
         pooled = torch.cat([mean, std, h.amax(dim=2)], dim=1)
@@ -184,7 +252,19 @@ def build_model_from_norm_stats(norm_stats: dict) -> nn.Module:
     if arch == "seqcnn_v1":
         return VoiceGuardSeqCNN(n_frames=int(norm_stats["n_frames"]), **common)
     if arch == "seqtcn_v2":
-        return VoiceGuardSeqTCN(**common)
+        # capacity/regularization the run was trained with (absent for v12/v13:
+        # those predate the kwargs, and the defaults reproduce them exactly)
+        channels = int(norm_stats["channels"]) if "channels" in norm_stats else 64
+        dilations = (tuple(int(d) for d in norm_stats["dilations"])
+                     if "dilations" in norm_stats else (1, 2, 4, 8, 16))
+        dropout = float(norm_stats["dropout"]) if "dropout" in norm_stats else 0.1
+        hidden = int(norm_stats["hidden"]) if "hidden" in norm_stats else 64
+        stochastic_depth = float(norm_stats["stochastic_depth"]) if "stochastic_depth" in norm_stats else 0.0
+        cmvn = bool(np.asarray(norm_stats["cmvn"]).item()) if "cmvn" in norm_stats else False
+        se = bool(np.asarray(norm_stats["se"]).item()) if "se" in norm_stats else False
+        return VoiceGuardSeqTCN(**common, channels=channels, dilations=dilations,
+                                dropout=dropout, hidden=hidden,
+                                stochastic_depth=stochastic_depth, cmvn=cmvn, se=se)
     raise ValueError(f"unknown arch {arch!r}; known: {ARCHS}")
 
 

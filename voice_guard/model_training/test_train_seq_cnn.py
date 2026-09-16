@@ -3,6 +3,8 @@ policy at the CLI, and an end-to-end cache-backed smoke run with ONNX
 export checked through onnxruntime."""
 from __future__ import annotations
 
+import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +13,9 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from train_seq_cnn import EMA, compute_masked_attack_type_loss, lr_at
+from train_seq_cnn import (EMA, attack_type_weight, compute_masked_attack_type_loss,
+                           focal_cross_entropy, lr_at, mixup_batch, sample_mixup_lambda,
+                           soft_target_cross_entropy, specaugment)
 
 HERE = Path(__file__).parent
 
@@ -87,4 +91,174 @@ def test_train_seq_cnn_end_to_end_smoke(tmp_path):
     assert str(np.load(out_dir / "norm_stats.npz")["arch"]) == "seqtcn_v2"
     sess = ort.InferenceSession(str(out_dir / "model.onnx"))
     outs = sess.run(None, {"lfcc_sequence": np.zeros((1, 184, 60), np.float32), "scalars": np.zeros((1, 6), np.float32)})
+    assert [o.shape for o in outs] == [(1, 2), (1, 2)]
+
+
+def test_lr_holds_at_min_past_cosine_endpoint():
+    # lr_at clamps progress to 1.0 at/after the cosine endpoint => flat hold at min_lr.
+    # This is what --min-lr-epochs relies on: the call site ends the cosine early (a
+    # smaller total_steps) and trailing epochs step past it, where lr_at returns min_lr.
+    total, warm, base = 1000, 100, 1e-3
+    on_end = lr_at(total, total, warm, base)
+    past_end = lr_at(total + 500, total, warm, base)
+    assert math.isclose(on_end, 1e-5, abs_tol=1e-9)
+    assert math.isclose(past_end, 1e-5, abs_tol=1e-9)
+    assert math.isclose(on_end, past_end, abs_tol=1e-12)
+
+
+def test_train_smoke_with_min_lr_hold_and_grad_clip(tmp_path):
+    import onnxruntime as ort
+
+    real_dir, fake_dir = _corpus(tmp_path)
+    out_dir = tmp_path / "run_hold"
+    r = subprocess.run(
+        [sys.executable, "train_seq_cnn.py", "--real", str(real_dir), "--fake", str(fake_dir),
+         "--channels", "none", "whatsapp", "--out", str(out_dir), "--cache-root",
+         str(tmp_path / "cache"), "--epochs", "3", "--min-lr-epochs", "1", "--grad-clip", "1.0",
+         "--workers", "1", "--batch-size", "8"],
+        cwd=HERE, capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr[-3000:]
+    hist = json.loads((out_dir / "history.json").read_text())
+    assert len(hist) == 3
+    cfg = json.loads((out_dir / "train_config.json").read_text())
+    assert cfg["min_lr_epochs"] == 1.0
+    assert cfg["grad_clip"] == 1.0
+    sess = ort.InferenceSession(str(out_dir / "model.onnx"))
+    outs = sess.run(None, {"lfcc_sequence": np.zeros((1, 184, 60), np.float32),
+                           "scalars": np.zeros((1, 6), np.float32)})
+    assert [o.shape for o in outs] == [(1, 2), (1, 2)]
+
+
+# ---------------------------------------------------------------------------
+# Post-v13 rework levers (docs/2026-09-training-improvement-plan.md axes F/D3).
+# Every lever must be exact-default OFF: gamma=0 / warmup=0 / mixup=0 /
+# specaugment=0 must reproduce the v12/v13 loss and pipeline bit-for-bit.
+# ---------------------------------------------------------------------------
+def test_attack_type_weight_default_is_constant_and_ramps_when_asked():
+    base = 0.5
+    for ep in range(5):
+        assert attack_type_weight(ep, 0.0, base) == base      # legacy behavior
+    assert attack_type_weight(0, 2.0, base) == base * 0.5     # epoch 1 of 2
+    assert attack_type_weight(1, 2.0, base) == base           # epoch 2 of 2
+    assert attack_type_weight(9, 2.0, base) == base           # stays clamped
+
+
+def test_focal_gamma_zero_matches_cross_entropy_loss():
+    torch.manual_seed(0)
+    logits = torch.randn(32, 2)
+    targets = torch.randint(0, 2, (32,))
+    w = torch.tensor([1.5, 0.75])
+    want = torch.nn.CrossEntropyLoss(weight=w, label_smoothing=0.05)(logits, targets)
+    got = focal_cross_entropy(logits, targets, weight=w, gamma=0.0, label_smoothing=0.05)
+    assert torch.allclose(got, want, atol=1e-6), (got, want)
+    assert torch.allclose(focal_cross_entropy(logits, targets),
+                          torch.nn.CrossEntropyLoss()(logits, targets), atol=1e-6)
+
+
+def test_focal_gamma_downweights_confident_examples_more_than_hard_ones():
+    targets = torch.tensor([0, 1])
+    easy = torch.tensor([[8.0, -8.0], [-8.0, 8.0]])            # p_t ~ 1
+    hard = torch.tensor([[0.01, -0.01], [-0.01, 0.01]])        # p_t ~ 0.5
+
+    def suppression(x):
+        """focal/CE = (1 - p_t)^gamma, the per-sample down-weighting factor."""
+        return float(focal_cross_entropy(x, targets, gamma=2.0) / focal_cross_entropy(x, targets, gamma=0.0))
+
+    assert suppression(easy) < 1e-8            # (1 - p_t)^2 with p_t ~ 1
+    assert 0.2 < suppression(hard) < 0.3       # (1 - 0.5)^2 = 0.25
+    assert suppression(easy) < suppression(hard)  # easy examples lose almost all their weight
+
+
+def test_soft_target_cross_entropy_matches_ce_for_one_hot_targets():
+    torch.manual_seed(1)
+    logits = torch.randn(16, 2)
+    targets = torch.randint(0, 2, (16,))
+    onehot = torch.nn.functional.one_hot(targets, 2).float()
+    assert torch.allclose(soft_target_cross_entropy(logits, onehot),
+                          torch.nn.CrossEntropyLoss()(logits, targets), atol=1e-6)
+    assert torch.allclose(soft_target_cross_entropy(logits, onehot, label_smoothing=0.05),
+                          torch.nn.CrossEntropyLoss(label_smoothing=0.05)(logits, targets), atol=1e-6)
+
+
+def test_mixup_batch_mixes_inputs_and_masks_ignored_attack_labels():
+    seq = torch.zeros(4, 3, 2)
+    seq[3] = 1.0
+    scal = torch.arange(8.0).reshape(4, 2)
+    label = torch.tensor([0, 1, 0, 1])
+    attack = torch.tensor([0, 1, -100, 1])  # window 2 carries no attack label
+    perm = torch.tensor([3, 2, 1, 0])
+
+    seq_mix, scal_mix, soft_rf, soft_attack, mask = mixup_batch(seq, scal, label, attack, 0.25, perm=perm)
+
+    assert torch.allclose(seq_mix[0], 0.25 * seq[0] + 0.75 * seq[3])
+    assert torch.allclose(scal_mix[0], 0.25 * scal[0] + 0.75 * scal[3])
+    assert torch.allclose(soft_rf.sum(dim=1), torch.ones(4))
+    # label 0 mixed with label[perm][0] = label[3] = 1
+    assert torch.allclose(soft_rf[0], torch.tensor([0.25, 0.75]))
+    # only windows whose partner ALSO has a label are usable for the attack head
+    assert mask.tolist() == [True, False, False, True]
+    assert torch.allclose(soft_attack[0], torch.tensor([0.25, 0.75]))
+    assert torch.allclose(soft_attack[3], torch.tensor([0.75, 0.25]))
+
+
+def test_mixup_lambda_is_deterministic_per_seed_and_in_range():
+    a = sample_mixup_lambda(0.4, np.random.default_rng(7))
+    b = sample_mixup_lambda(0.4, np.random.default_rng(7))
+    assert a == b and 0.0 < a < 1.0
+
+
+def test_specaugment_zeroes_masks_and_is_a_noop_when_off():
+    seq = torch.ones(3, 184, 60)
+    assert specaugment(seq, 0, 8, 0, 8) is seq             # default: no-op, same object
+    out = specaugment(seq, 2, 6, 1, 5, rng=np.random.default_rng(3))
+    assert out.shape == seq.shape
+    assert torch.equal(seq, torch.ones(3, 184, 60))        # input untouched
+    assert (out == 0).sum() > 0                            # something was masked
+    assert (out.flatten(1).sum(dim=1) < 184 * 60).all()    # per-sample masks landed
+
+def test_train_smoke_with_rework_levers(tmp_path):
+    """End-to-end: wider + regularized model, focal loss, attack-head warmup,
+    Mixup, SpecAugment, CMVN/SE/stochastic depth, LR hold, grad clip -- one run,
+    asserting the ONNX contract still holds and provenance is written."""
+    import onnxruntime as ort
+
+    real_dir, fake_dir = _corpus(tmp_path)
+    out_dir = tmp_path / "run_rework"
+    r = subprocess.run(
+        [sys.executable, "train_seq_cnn.py", "--real", str(real_dir), "--fake", str(fake_dir),
+         "--channels", "none", "whatsapp", "--out", str(out_dir), "--cache-root", str(tmp_path / "cache"),
+         "--epochs", "2", "--min-lr-epochs", "1", "--grad-clip", "1.0", "--workers", "1", "--batch-size", "8",
+         "--model-channels", "32", "--model-dilations", "1,2", "--model-hidden", "32", "--model-dropout", "0.2",
+         "--model-stochastic-depth", "0.1", "--model-cmvn", "--model-se",
+         "--focal-gamma", "2.0", "--attack-type-warmup-epochs", "2.0",
+         "--mixup-alpha", "0.4", "--specaugment-freq-masks", "2", "--specaugment-time-masks", "1"],
+        cwd=HERE, capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr[-4000:]
+    cfg = json.loads((out_dir / "train_config.json").read_text())
+    for key, want in (("focal_gamma", 2.0), ("attack_type_warmup_epochs", 2.0), ("mixup_alpha", 0.4),
+                      ("specaugment_freq_masks", 2), ("specaugment_time_masks", 1),
+                      ("model_channels", 32), ("model_hidden", 32), ("model_stochastic_depth", 0.1)):
+        assert cfg[key] == want, key
+    assert cfg["model_cmvn"] is True and cfg["model_se"] is True
+    ns = dict(np.load(out_dir / "norm_stats.npz"))
+    assert int(ns["channels"]) == 32 and int(ns["hidden"]) == 32
+    assert tuple(int(d) for d in ns["dilations"]) == (1, 2)
+    assert float(ns["stochastic_depth"]) == 0.1
+    assert bool(ns["cmvn"]) and bool(ns["se"])
+    hist = json.loads((out_dir / "history.json").read_text())
+    assert len(hist) == 2
+    # the 2-epoch warmup ramp is visible in the per-epoch log: half weight, then full
+    assert hist[0]["attack_weight"] == cfg["attack_type_loss_weight"] / 2
+    assert hist[1]["attack_weight"] == cfg["attack_type_loss_weight"]
+    # the rebuilt model must match the checkpoint (capacity round-trip through norm_stats)
+    from model import build_model_from_norm_stats
+
+    model = build_model_from_norm_stats(ns)
+    model.load_state_dict(torch.load(out_dir / "model.pt", map_location="cpu", weights_only=True))
+    assert sum(p.numel() for p in model.parameters()) == cfg["n_params"]
+    sess = ort.InferenceSession(str(out_dir / "model.onnx"))
+    outs = sess.run(None, {"lfcc_sequence": np.zeros((1, 184, 60), np.float32),
+                           "scalars": np.zeros((1, 6), np.float32)})
     assert [o.shape for o in outs] == [(1, 2), (1, 2)]

@@ -293,6 +293,43 @@ a machine without the data; the training box has it under
    the diagnosis) and exits nonzero on either gate — the current deployed
    model fails the loop gate today, which is the point of the gate.
 
+## Post-v13 rework training levers (2026-09-16)
+
+v13 (2026-09-14) cleared the phone and acoustic headline gates but failed the
+confound gates (9/14) and the playback-loop gate (`tts_elevenlabs_sample.wav`
+0.248 < 0.50), so it is **not deployed**. The follow-up levers from
+`docs/2026-09-training-improvement-plan.md` are now implemented in
+`train_seq_cnn.py` / `model.py`. **Every one is OFF by default and reduces to the
+exact v12/v13 behavior when off**, and none of them changes the ONNX I/O contract
+(`lfcc_sequence (1,184,60)` + `scalars (1,6)` -> `real_fake_logits (1,2)` +
+`attack_type_logits (1,2)`).
+
+| flag | what it does | pairs with |
+|---|---|---|
+| `--model-channels/--model-dilations/--model-hidden/--model-dropout` | TCN capacity (default 64 / `1,2,4,8,16` / 64 / 0.1) | the regularizers below |
+| `--model-stochastic-depth` | per-sample residual skips, dense rule, **train-only** | capacity |
+| `--model-cmvn` | per-utterance mean/var normalization inside the graph (deterministic, attacks the channel/level confound) | `playback`/unseen channels |
+| `--model-se` | squeeze-excitation channel attention | capacity |
+| `--focal-gamma` | focal modulation of the real/fake CE (0 = plain weighted CE) | hard fakes |
+| `--attack-type-warmup-epochs` | ramp the attack-type loss 0 -> `--attack-type-loss-weight` | attack-head gates |
+| `--mixup-alpha` | Beta Mixup on sequence+scalars with soft targets (attack head mixes only where both partners are labeled) | overfit |
+| `--specaugment-freq-masks/-freq-width/-time-masks/-time-width` | SpecAugment on the raw LFCC batch | overfit |
+| `--min-lr-epochs` | hold the LR at `min_lr` for N trailing epochs instead of re-stretching the cosine | "more epochs" |
+| `--grad-clip` | global grad-norm clip (1.0 recommended for bigger runs) | capacity |
+
+Capacity/regularization choices are **persisted in `norm_stats.npz`**, so
+`select_best_checkpoint_seqcnn.py`, `evaluate.py`, `validate_fp16.py` and the app
+all rebuild the exact architecture a checkpoint was trained with (v12/v13
+`norm_stats.npz` have no such keys and therefore load with the old defaults —
+covered by a test against the real checkpoints).
+
+Selection gained two robustness rules (both optional, `pooled` + raw argmin stays
+the default): `--metric channel_balanced` (mean per-channel EER, so gsm_2g and
+tandem_xnet stop dominating the argmin) and `--min-attack-bacc` (an EER-min
+checkpoint with a weak attack head cannot win); it still reads only the `select`
+split. See `docs/2026-09-training-improvement-plan.md` §9 for the runbook and
+`_rework_tests.cmd` for the detached full-suite test run.
+
 ## Known gaps (deliberate, not oversights)
 
 - `backend/main.py`'s response label (`"mobilenetv3-small-int8-demo-v0.1"`)

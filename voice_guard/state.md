@@ -1769,6 +1769,65 @@ phone+acoustic pooled EER). What remains is the long-running part:
 9. on-device verification. Unseen-channel generalization and the accent cells
 are the two other open fronts.
 
+## v13 RESULT + post-v13 rework levers (2026-09-14 → 2026-09-16) — still NOT deployed
+
+Full report: `model_training/runs/eval_v13_test/report.md`; log
+`model_training/runs/v13_stageB_train_eval.log`. v13 = v12's recipe (now with the
+`playback`/acoustic channel in both training and protocol) + a hash-selected ~50%
+third `playback` rendition + all four pre-registered gates. Trained 2026-09-14,
+30 epochs, selected `epoch_06.pt`, fp16 storage validation PASS.
+
+**Gate scorecard (four criteria):**
+
+| criterion | result |
+|---|---|
+| confound gates | **FAIL** (9 of 14 rows) |
+| beats reference on test headline EER | PASS (0.3149 vs v11 0.4853, CIs disjoint) |
+| acoustic (playback) EER beats reference | PASS (0.2755 vs 0.4925, CIs disjoint) |
+| playback-loop gates (clean 0.60 / loop 0.50) | **FAIL** (`tts_elevenlabs_sample.wav` loop 0.248) |
+| attack-head gates | PASS (leave-out bacc 0.750; MLAAD tts 76.6%) |
+| `deploy` | **False** |
+
+So the acoustic-channel work **did** land — the loop channel went 0.4925 → 0.2755
+pooled, and whatsapp 0.2218 / volte 0.1744 / pstn 0.2470 / cellular_3g 0.2904 are
+far better than v12 — but the fake-side style confound is still the blocker
+(real:zcrVariance/shimmer/hnr_db; fake:energyVariance/zcrVariance 3.91,
+jitter 2.72, shimmer 1.84, hnr_db 2.27, pad_fraction 1.25 received no fix), and one
+bundled TTS asset still collapses through a speaker→mic loop. gsm_2g remains the
+worst channel (0.4364) and both accent cells are still at chance.
+
+**Post-v13 rework (2026-09-16, in progress):** the levers from
+`model_training/docs/2026-09-training-improvement-plan.md` are now implemented
+(§9 records the runbook and the per-axis rationale). All are default-OFF and
+bit-for-bit backward compatible when off:
+- capacity + paired regularization, **persisted in `norm_stats.npz`** so every
+  loader (select / evaluate / validate_fp16 / app) rebuilds the trained arch:
+  `--model-channels/-dilations/-hidden/-dropout`, plus
+  `--model-stochastic-depth` (train-only dense-rule residual skips),
+  `--model-cmvn` (per-utterance normalization inside the graph — deterministic
+  and ONNX-safe; directly aimed at the channel/level confound), `--model-se`;
+- loss/augmentation: `--focal-gamma` (identical to the old weighted CE at 0),
+  `--attack-type-warmup-epochs`, `--mixup-alpha`, `--specaugment-*`;
+- optimization: `--min-lr-epochs` (cosine-then-hold, so more epochs means real
+  low-LR polish) and `--grad-clip`;
+- selection (`select_best_checkpoint_seqcnn.py`): `--metric channel_balanced`
+  (kills the gsm_2g/tandem_xnet domination) and `--min-attack-bacc` (no EER-min
+  checkpoint with a weak attack head), composing with `--stability-tolerance`.
+- The ONNX I/O contract is unchanged by all of it, so the app does not change.
+
+**What remains (the long part):** actually launch the rework candidate
+(`runs/voice_guard_v13x`, §9 of the plan), score it against **all four** gates,
+and only then message the UI session before copying to
+`assets/models/voice_detector.onnx` + on-device verification. The confound
+remediation is still the hard part: the 60→66-d physio widening (v10_physio)
+did NOT fix it, so regularization/CMVN/augmentation are the current answers being
+tested, not proven ones.
+
+**Test state after this pass:** 130 passed + 1 skipped (the retired v9 checkpoint
+is no longer on disk) across trainer/model/selector/protocol/cache/features/dataset
+suites, run detached via `model_training/_rework_tests.cmd` →
+`runs/_rework_tests.log`.
+
 ## How to keep this file useful
 
 - Update the "Current status" date and paragraph at the *start* of a
