@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import soundfile as sf
 import torch
 
@@ -71,6 +72,101 @@ def test_clean_only_training_is_refused(tmp_path):
                        cwd=HERE, capture_output=True, text=True)
     assert r.returncode != 0 and "CleanOnlyEvalError" in r.stderr
     assert not (tmp_path / "c").exists() or not any((tmp_path / "c").iterdir())
+
+
+def _make_file_specs(tmp_path, label, source_set, n=6):
+    """Minimal synthetic FileSpec list for testing corpus helpers that don't
+    touch the real DATA_ROOT / cache. Creates WAV files under tmp_path."""
+    import soundfile as sf
+    from dataset import FileSpec
+
+    d = tmp_path / ("real" if label == 0 else "fake")
+    d.mkdir(parents=True, exist_ok=True)
+    sr = 16000
+    specs = []
+    for i in range(n):
+        secs = 2.0 + 0.5 * i
+        t = np.arange(int(secs * sr)) / sr
+        p = d / f"x{i}.wav"
+        sf.write(str(p), (0.3 * np.sin(2 * np.pi * 220 * t) + np.random.default_rng(i).normal(0, 0.02, len(t))).astype(np.float32), sr)
+        specs.append(FileSpec(path=str(p), file_id=f"x{i}", label=label, source_set=source_set))
+    return specs
+
+
+def test_playback_fraction_full_fold(tmp_path):
+    """playback_fraction=1.0 puts every file into the playback unit; 0.0
+    skips it entirely. v13 default 0.5 is ~half by stable hash."""
+    from corpus import training_units
+
+    specs_by_set = {"train": _make_file_specs(tmp_path, 0, "train", n=8)}
+    # 1.0 = every file gets a playback rendition
+    full = training_units(specs_by_set, seed=123, playback_fraction=1.0)
+    pb_units = [u for u in full if u[2] == "playback"]
+    assert len(pb_units) == 1
+    assert len(pb_units[0][1]) == 8  # all 8 files
+    # 0.0 = no playback unit at all
+    none = training_units(specs_by_set, seed=123, playback_fraction=0.0)
+    assert not any(u[2] == "playback" for u in none)
+    # 0.5 default picks a deterministic subset
+    half = training_units(specs_by_set, seed=123, playback_fraction=0.5)
+    half_pb = [u for u in half if u[2] == "playback"]
+    assert 0 < len(half_pb[0][1]) < 8
+    # deterministic: same seed -> same subset
+    half2 = training_units(specs_by_set, seed=123, playback_fraction=0.5)
+    assert half2 == half
+
+
+def test_room_renditions_training_only(tmp_path):
+    """Room renditions are added when room_fraction > 0 and are rejected as
+    eval channels; playback_fraction and phone channels stay independent."""
+    from corpus import training_units, TRAIN_ROOM_CHANNELS
+    from eval_protocol import (
+        resolve_channels,
+        room_subset,
+        TRAIN_ROOM_CHANNELS as RC,
+        CleanOnlyEvalError,
+    )
+
+    specs_by_set = {"train": _make_file_specs(tmp_path, 0, "train", n=12)}
+    phone = tuple(c for c in ("whatsapp", "volte") if c is not None)
+
+    # With room_fraction=1.0, every file gets a room rendition through one of
+    # the room channels, split by stable hash across the three recipes.
+    units = training_units(specs_by_set, seed=7, channels=phone, room_fraction=1.0)
+    room_units = [u for u in units if u[2] in RC]
+    recipes_seen = {u[2] for u in room_units}
+    # Each room recipe should get at least some files (deterministic hash).
+    assert recipes_seen == set(RC)
+    # The room units partition the files (each file in exactly one room recipe).
+    room_file_ids = [f.file_id for u in room_units for f in u[1]]
+    assert len(room_file_ids) == len(set(room_file_ids)) == 12
+
+    # Room channels are NOT valid eval channels.
+    for ch in RC:
+        with pytest.raises(ValueError, match="training-only room/loudspeaker"):
+            resolve_channels([ch], "phone", "eval")
+    # A plain eval with phone channels does not include room channels.
+    resolved = resolve_channels([None, "whatsapp", "playback"], "phone", "eval")
+    assert not any(c in RC for c in resolved)
+    # room_subset extracts only room renditions from a list.
+    assert room_subset([None, "whatsapp_room", "playback", "volte_room"]) == ["whatsapp_room", "volte_room"]
+    assert room_subset([None, "whatsapp", "playback"]) == []
+
+    # Room rendering is independent of phone rendering (tagged stable hash).
+    from corpus import train_phone_channel_from, room_channel_from
+    fid = "x42"
+    for seed in (0, 1, 99):
+        phone_ch = train_phone_channel_from(fid, phone, seed)
+        room_ch = room_channel_from(fid, RC, seed)
+        assert phone_ch in phone and room_ch in RC
+        # Same seed can route the same file to different phone vs room recipes --
+        # they're independent dimensions, not correlated.
+    # Different seeds for phone vs room on the same file: independence guaranteed
+    # by the different tags ("train_channel" vs "room_channel").
+    p0 = train_phone_channel_from(fid, phone, 0)
+    r1 = room_channel_from(fid, RC, 1)
+    assert p0 in phone and r1 in RC
+
 
 
 def test_train_seq_cnn_end_to_end_smoke(tmp_path):
