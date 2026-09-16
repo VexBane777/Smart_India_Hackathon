@@ -40,6 +40,8 @@ Usage (the v12 run):
     python train_seq_cnn.py --out runs/voice_guard_v12 --cache-root <cache>
 Custom dirs (e.g. the smoke test):
     python train_seq_cnn.py --real DIR... --fake DIR... --out runs/x --epochs 1
+Conformer (rework axis C/4):
+    python train_seq_cnn.py --arch conformer_v1 --out runs/voice_guard_v14 --cache-root <cache>
 """
 from __future__ import annotations
 
@@ -288,7 +290,16 @@ def compute_norm_stats(coll, train_idx: np.ndarray, arch: str, seed: int,
     }
     # Persist capacity so build_model_from_norm_stats rebuilds the SAME arch when loading
     # model.pt (select/checkpoint + evaluate + validate_fp16 all rebuild from norm_stats).
-    if capacity is not None and arch == "seqtcn_v2":
+    if capacity is not None and arch == "conformer_v1":
+        stats["channels"] = np.array(int(capacity["channels"]))
+        stats["n_heads"] = np.array(int(capacity["n_heads"]))
+        stats["n_layers"] = np.array(int(capacity["n_layers"]))
+        stats["ff_expansion"] = np.array(int(capacity["ff_expansion"]))
+        stats["conv_kernel"] = np.array(int(capacity["conv_kernel"]))
+        stats["hidden"] = np.array(int(capacity["hidden"]))
+        stats["dropout"] = np.array(float(capacity["dropout"]))
+        stats["cmvn"] = np.array(bool(capacity.get("cmvn", False)))
+    elif capacity is not None and arch == "seqtcn_v2":
         stats["channels"] = np.array(int(capacity["channels"]))
         stats["dilations"] = np.array(capacity["dilations"])
         stats["dropout"] = np.array(float(capacity["dropout"]))
@@ -330,7 +341,11 @@ def main() -> None:
                          "playback rendition (deterministic via stable_unit; default "
                          "0.5 = the pre-registered v13 recipe)")
     ap.add_argument("--application", default="phone", choices=APPLICATIONS)
-    ap.add_argument("--arch", default="seqtcn_v2", choices=["seqtcn_v2", "seqcnn_v1"])
+    ap.add_argument("--arch", default="seqtcn_v2", choices=["seqtcn_v2", "seqcnn_v1", "conformer_v1"],
+                    help="model architecture: seqtcn_v2 (residual dilated TCN / v12), "
+                         "seqcnn_v1 (shallow Conv1d / v11), conformer_v1 (Conformer encoder / v14, "
+                         "rework axis C/4). conformer-specific capacity: --conformer-n-heads, "
+                         "--conformer-n-layers, --conformer-ff-expansion, --conformer-conv-kernel.")
     ap.add_argument("--out", type=Path, default=Path("runs/voice_guard_v12"))
     ap.add_argument("--cache-root", type=Path, default=None)
     ap.add_argument("--epochs", type=int, default=30)
@@ -356,6 +371,11 @@ def main() -> None:
     ap.add_argument("--model-se", action="store_true",
                     help="squeeze-excitation channel attention in each residual block (pairs with "
                          "--model-channels). Persisted in norm_stats.npz.")
+    # --- Conformer (conformer_v1) capacity; only used with --arch conformer_v1 ---
+    ap.add_argument("--conformer-n-heads", type=int, default=4, help="conformer_v1 attention heads (channels must be divisible by this; default 4).")
+    ap.add_argument("--conformer-n-layers", type=int, default=2, help="conformer_v1 encoder layers (default 2).")
+    ap.add_argument("--conformer-ff-expansion", type=int, default=4, help="conformer_v1 feed-forward expansion factor (default 4).")
+    ap.add_argument("--conformer-conv-kernel", type=int, default=31, help="conformer_v1 depthwise conv kernel, must be odd (default 31).")
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--weight-decay", type=float, default=0.01)
@@ -421,12 +441,17 @@ def main() -> None:
           f"train real={n_real} fake={n_fake}; attack-labeled train={int((attack_target[train_idx] >= 0).sum())}",
           flush=True)
 
-    norm_stats = compute_norm_stats(coll, train_idx, args.arch, args.seed,
-                                    capacity={"channels": args.model_channels,
-                                              "dilations": tuple(int(x) for x in args.model_dilations.split(",")),
-                                              "dropout": args.model_dropout, "hidden": args.model_hidden,
-                                              "stochastic_depth": args.model_stochastic_depth,
-                                              "cmvn": args.model_cmvn, "se": args.model_se})
+    capacity = {"channels": args.model_channels,
+                "dilations": tuple(int(x) for x in args.model_dilations.split(",")),
+                "dropout": args.model_dropout, "hidden": args.model_hidden,
+                "stochastic_depth": args.model_stochastic_depth,
+                "cmvn": args.model_cmvn, "se": args.model_se}
+    if args.arch == "conformer_v1":
+        capacity.update({"n_heads": args.conformer_n_heads,
+                         "n_layers": args.conformer_n_layers,
+                         "ff_expansion": args.conformer_ff_expansion,
+                         "conv_kernel": args.conformer_conv_kernel})
+    norm_stats = compute_norm_stats(coll, train_idx, args.arch, args.seed, capacity=capacity)
     model = build_model_from_norm_stats(norm_stats).to(device)
     ema = EMA(model, args.ema_decay)
     n_params = sum(p.numel() for p in model.parameters())

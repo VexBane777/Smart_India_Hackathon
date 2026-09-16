@@ -9,6 +9,8 @@ any of them from a saved run.
   field of 5 frames (~130 ms at hop 256), too little temporal context.
 - VoiceGuardSeqTCN ("seqtcn_v2", v12): dilated residual TCN, receptive
   field 65 frames (~1.1 s), mean+std+max pooling, ~87k params.
+- VoiceGuardConformer ("conformer_v1", v14): Conformer encoder (MHSA + Conv
+  module), same ONNX I/O contract as seqtcn_v2 (rework axis C/4).
 
 All sequence models share one ONNX I/O contract (what lib/services/src/
 tflite_io.dart sends and reads):
@@ -240,7 +242,184 @@ class VoiceGuardSeqTCN(nn.Module):
         return self.real_fake_head(trunk_out), self.attack_type_head(trunk_out)
 
 
-ARCHS = ("seqcnn_v1", "seqtcn_v2")
+class _SinusoidalPositionalEncoding(nn.Module):
+    """Standard sinusoidal positional encoding (Vaswani et al.). Registered as a
+    buffer so it bakes into the ONNX graph. max_len must be >= the sequence
+    length used at export time (184 frames)."""
+
+    def __init__(self, d_model: int, max_len: int = 512):
+        super().__init__()
+        assert d_model % 2 == 0, f"d_model {d_model} must be even for sinusoidal PE"
+        position = torch.arange(0, max_len).unsqueeze(1).float()
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, d_model)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe.unsqueeze(0))  # (1, max_len, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.pe[:, : x.shape[1]]
+
+
+def _silu(x: torch.Tensor) -> torch.Tensor:
+    """SiLU / Swish: x * sigmoid(x). Decomposes to Sigmoid + Mul for ONNX opset 13."""
+    return x * torch.sigmoid(x)
+
+
+class _ConformerFFN(nn.Module):
+    """Pre-norm feed-forward (Macaron): LayerNorm -> Linear(d, d*e) -> SiLU ->
+    Dropout -> Linear(d*e, d) -> Dropout. Caller applies the residual."""
+
+    def __init__(self, d_model: int, expansion: int = 4, dropout: float = 0.1):
+        super().__init__()
+        hidden = d_model * expansion
+        self.norm = nn.LayerNorm(d_model)
+        self.fc1 = nn.Linear(d_model, hidden)
+        self.fc2 = nn.Linear(hidden, d_model)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = self.drop(_silu(self.fc1(x)))
+        return self.drop(self.fc2(x))
+
+
+class _ConformerSelfAttention(nn.Module):
+    """Pre-norm multi-head self-attention with manual softmax (ONNX-safe, opset 13).
+
+    No nn.MultiheadAttention — explicit matmul + softmax so the graph traces
+    cleanly under dynamo=False export. Operates on (B, T, C)."""
+
+    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.1):
+        super().__init__()
+        assert d_model % n_heads == 0, f"d_model {d_model} not divisible by n_heads {n_heads}"
+        self.norm = nn.LayerNorm(d_model)
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
+        self.qkv = nn.Linear(d_model, 3 * d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+        self.drop = nn.Dropout(dropout)
+        self.scale = self.head_dim ** -0.5
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        B, T, C = x.shape
+        qkv = self.qkv(x)
+        q, k, v = qkv.chunk(3, dim=-1)
+        q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = k.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+        attn = torch.softmax(scores, dim=-1)
+        attn = self.drop(attn)
+        out = torch.matmul(attn, v)
+        out = out.transpose(1, 2).contiguous().view(B, T, C)
+        return self.out_proj(out)
+
+
+class _ConformerConv(nn.Module):
+    """Pre-norm convolution module:
+    LayerNorm -> 1x1 Conv1d(d, 2*d) -> GLU -> depthwise Conv1d(k) -> BatchNorm
+    -> SiLU -> 1x1 Conv1d(d, d) -> Dropout. (B, T, C) in/out."""
+
+    def __init__(self, d_model: int, kernel_size: int = 31, dropout: float = 0.1):
+        super().__init__()
+        assert kernel_size % 2 == 1, f"kernel_size {kernel_size} must be odd for symmetric padding"
+        self.norm = nn.LayerNorm(d_model)
+        self.pw1 = nn.Conv1d(d_model, 2 * d_model, kernel_size=1)
+        self.glu = nn.GLU(dim=1)
+        self.dw = nn.Conv1d(d_model, d_model, kernel_size, padding=kernel_size // 2, groups=d_model)
+        self.bn = nn.BatchNorm1d(d_model)
+        self.pw2 = nn.Conv1d(d_model, d_model, kernel_size=1)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x)
+        x = x.transpose(1, 2)
+        x = self.glu(self.pw1(x))
+        x = _silu(self.bn(self.dw(x)))
+        x = self.pw2(x)
+        x = self.drop(x)
+        return x.transpose(1, 2)
+
+
+class _ConformerBlock(nn.Module):
+    """Single Conformer encoder block (pre-norm residual).
+
+    x = x + 0.5 * FFN1(x)     # Macaron, half-step
+    x = x +       MHSA(x)
+    x = x +       Conv(x)
+    x = x + 1.0 * FFN2(x)
+    x = LayerNorm(x)          # output norm
+    """
+
+    def __init__(self, d_model: int, n_heads: int, expansion: int = 4,
+                 kernel_size: int = 31, dropout: float = 0.1):
+        super().__init__()
+        self.ffn1 = _ConformerFFN(d_model, expansion, dropout)
+        self.mhsa = _ConformerSelfAttention(d_model, n_heads, dropout)
+        self.conv = _ConformerConv(d_model, kernel_size, dropout)
+        self.ffn2 = _ConformerFFN(d_model, expansion, dropout)
+        self.drop = nn.Dropout(dropout)
+        self.out_norm = nn.LayerNorm(d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + 0.5 * self.drop(self.ffn1(x))
+        x = x + self.drop(self.mhsa(x))
+        x = x + self.conv(x)
+        x = x + 1.0 * self.drop(self.ffn2(x))
+        return self.out_norm(x)
+
+
+class VoiceGuardConformer(nn.Module):
+    """v14 ("conformer_v1"): Conformer encoder (MHSA + Conv module) with the
+    SAME ONNX I/O contract as VoiceGuardSeqTCN.
+
+    inputs:  lfcc_sequence (B, 184, 60) float32, scalars (B, 6) float32
+    outputs: real_fake_logits (B, 2), attack_type_logits (B, 2)  (raw logits)
+
+    Normalization (FixedNormalize* + optional per-utterance CMVN) lives inside
+    the graph. Capacity kwargs persisted in norm_stats.npz — see
+    build_model_from_norm_stats / train_seq_cnn.py.
+    """
+
+    def __init__(self, n_lfcc: int, n_scalars: int, seq_mean: np.ndarray, seq_std: np.ndarray,
+                 scalar_mean: np.ndarray, scalar_std: np.ndarray,
+                 channels: int = 48, n_heads: int = 4, n_layers: int = 2,
+                 ff_expansion: int = 4, conv_kernel: int = 31, dropout: float = 0.1,
+                 hidden: int = 64, cmvn: bool = False, num_classes: int = 2):
+        super().__init__()
+        assert channels % 2 == 0, "channels (d_model) must be even for sinusoidal PE"
+        assert channels % n_heads == 0, f"channels {channels} not divisible by n_heads {n_heads}"
+        self.seq_normalize = FixedNormalizeSeq(seq_mean, seq_std)
+        self.scalar_normalize = FixedNormalize(scalar_mean, scalar_std)
+        self.cmvn = bool(cmvn)
+        self.pos_enc = _SinusoidalPositionalEncoding(channels)
+        self.input_proj = nn.Linear(n_lfcc, channels)
+        self.blocks = nn.Sequential(*[
+            _ConformerBlock(channels, n_heads, ff_expansion, conv_kernel, dropout)
+            for _ in range(n_layers)])
+        self.trunk = nn.Sequential(
+            nn.Linear(3 * channels + n_scalars, hidden), nn.ReLU(), nn.Dropout(dropout))
+        self.real_fake_head = nn.Linear(hidden, num_classes)
+        self.attack_type_head = nn.Linear(hidden, num_classes)
+
+    def normalize_sequence(self, seq: torch.Tensor) -> torch.Tensor:
+        """(B, T, C): sequence normalization (and optional in-graph CMVN)."""
+        x = self.seq_normalize(seq)
+        return per_utterance_cmvn(x) if self.cmvn else x
+
+    def forward(self, seq: torch.Tensor, scalars: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        x = self.pos_enc(self.input_proj(self.normalize_sequence(seq)))  # (B, T, C)
+        x = self.blocks(x)
+        mean = x.mean(dim=1)
+        std = torch.sqrt(((x - mean.unsqueeze(1)) ** 2).mean(dim=1) + 1e-5)
+        pooled = torch.cat([mean, std, x.amax(dim=1)], dim=1)
+        trunk_out = self.trunk(torch.cat([pooled, self.scalar_normalize(scalars)], dim=1))
+        return self.real_fake_head(trunk_out), self.attack_type_head(trunk_out)
+
+
+ARCHS = ("seqcnn_v1", "seqtcn_v2", "conformer_v1")
 
 
 def build_model_from_norm_stats(norm_stats: dict) -> nn.Module:
@@ -265,6 +444,19 @@ def build_model_from_norm_stats(norm_stats: dict) -> nn.Module:
         return VoiceGuardSeqTCN(**common, channels=channels, dilations=dilations,
                                 dropout=dropout, hidden=hidden,
                                 stochastic_depth=stochastic_depth, cmvn=cmvn, se=se)
+    if arch == "conformer_v1":
+        channels = int(norm_stats["channels"]) if "channels" in norm_stats else 48
+        n_heads = int(norm_stats["n_heads"]) if "n_heads" in norm_stats else 4
+        n_layers = int(norm_stats["n_layers"]) if "n_layers" in norm_stats else 2
+        ff_expansion = int(norm_stats["ff_expansion"]) if "ff_expansion" in norm_stats else 4
+        conv_kernel = int(norm_stats["conv_kernel"]) if "conv_kernel" in norm_stats else 31
+        dropout = float(norm_stats["dropout"]) if "dropout" in norm_stats else 0.1
+        hidden = int(norm_stats["hidden"]) if "hidden" in norm_stats else 64
+        cmvn = bool(np.asarray(norm_stats["cmvn"]).item()) if "cmvn" in norm_stats else False
+        return VoiceGuardConformer(**common, channels=channels, n_heads=n_heads,
+                                   n_layers=n_layers, ff_expansion=ff_expansion,
+                                   conv_kernel=conv_kernel, dropout=dropout,
+                                   hidden=hidden, cmvn=cmvn)
     raise ValueError(f"unknown arch {arch!r}; known: {ARCHS}")
 
 

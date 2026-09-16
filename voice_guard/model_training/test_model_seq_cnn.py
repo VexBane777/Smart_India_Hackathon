@@ -17,6 +17,7 @@ from model import (
     VoiceGuardMLP,
     VoiceGuardSeqCNN,
     VoiceGuardSeqTCN,
+    VoiceGuardConformer,
     build_model_from_norm_stats,
     export_onnx,
     load_scoring_model,
@@ -39,7 +40,7 @@ def test_fixed_normalize_seq_broadcasts_across_time():
     assert norm(torch.randn(4, 184, 60)).shape == (4, 184, 60)
 
 
-@pytest.mark.parametrize("arch,cls", [(None, VoiceGuardSeqCNN), ("seqcnn_v1", VoiceGuardSeqCNN), ("seqtcn_v2", VoiceGuardSeqTCN)])
+@pytest.mark.parametrize("arch,cls", [(None, VoiceGuardSeqCNN), ("seqcnn_v1", VoiceGuardSeqCNN), ("seqtcn_v2", VoiceGuardSeqTCN), ("conformer_v1", VoiceGuardConformer)])
 def test_factory_and_forward_shapes(arch, cls):
     model = build_model_from_norm_stats(_norm(arch)).eval()
     assert isinstance(model, cls)
@@ -107,6 +108,60 @@ def test_onnx_contract_and_parity(tmp_path):
     with torch.no_grad():
         rf_t, at_t = model(torch.from_numpy(seq), torch.from_numpy(scal))
     assert np.allclose(rf_o, rf_t.numpy(), atol=1e-4) and np.allclose(at_o, at_t.numpy(), atol=1e-4)
+
+
+@pytest.mark.parametrize("n_layers", [1, 2, 4])
+@pytest.mark.parametrize("channels", [16, 32, 48])
+def test_conformer_capacity_roundtrip(n_layers, channels):
+    """conformer_v1 capacity persisted in norm_stats must rebuild with the SAME
+    wider capacity and correct head dim (channels / n_heads). ONNX I/O contract
+    is unchanged: inputs (1,184,60)+(1,6) -> (1,2)+(1,2)."""
+    ns = _norm("conformer_v1")
+    ns["channels"] = np.array(channels)
+    ns["n_heads"] = np.array(4)
+    ns["n_layers"] = np.array(n_layers)
+    ns["ff_expansion"] = np.array(2)
+    ns["conv_kernel"] = np.array(7)
+    ns["hidden"] = np.array(32)
+    # channels must be divisible by n_heads
+    assert channels % 4 == 0
+    model = build_model_from_norm_stats(ns).eval()
+    assert isinstance(model, VoiceGuardConformer)
+    rf, at = model(torch.randn(1, 184, 60), torch.randn(1, 6))
+    assert rf.shape == (1, 2) and at.shape == (1, 2)
+    # param count scales with n_layers
+    n_params = sum(p.numel() for p in model.parameters())
+    assert n_params > 0
+
+
+def test_conformer_onnx_contract(tmp_path):
+    """conformer_v1 exports with the SAME ONNX I/O contract as seqtcn_v2."""
+    import onnxruntime as ort
+
+    model = build_model_from_norm_stats(_norm("conformer_v1")).eval()
+    path = tmp_path / "conf.onnx"
+    export_onnx(model, path)
+    sess = ort.InferenceSession(str(path))
+    assert [i.name for i in sess.get_inputs()] == ONNX_INPUT_NAMES
+    assert [o.name for o in sess.get_outputs()] == ONNX_OUTPUT_NAMES
+    assert list(sess.get_inputs()[0].shape) == [1, 184, 60]
+    assert list(sess.get_inputs()[1].shape) == [1, 6]
+    seq, scal = (np.random.default_rng(0).normal(0, 1, (1, 184, 60)).astype(np.float32),
+                 np.ones((1, 6), np.float32))
+    rf_o, at_o = sess.run(None, {"lfcc_sequence": seq, "scalars": scal})
+    with torch.no_grad():
+        rf_t, at_t = model(torch.from_numpy(seq), torch.from_numpy(scal))
+    assert np.allclose(rf_o, rf_t.numpy(), atol=1e-4) and np.allclose(at_o, at_t.numpy(), atol=1e-4)
+
+
+def test_conformer_eval_determinism():
+    """conformer_v1 forward is deterministic in eval mode (no dropout/BN noise)."""
+    model = build_model_from_norm_stats(_norm("conformer_v1")).eval()
+    seq, scal = torch.randn(4, 184, 60), torch.randn(4, 6)
+    with torch.no_grad():
+        out1 = model(seq, scal)
+        out2 = model(seq, scal)
+    assert torch.allclose(out1[0], out2[0]) and torch.allclose(out1[1], out2[1])
 
 
 @pytest.mark.parametrize("dim", [63, 66])

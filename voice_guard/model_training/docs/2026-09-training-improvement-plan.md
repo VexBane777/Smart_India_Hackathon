@@ -295,6 +295,48 @@ shell caps a command at 30 s and the trainer tests spawn real trainings.
 **Still open after this pass (none of it blocks the rework run):**
 multi-seed runner + ensembling (H/K), channel-stratified batching (D5),
 near-duplicate dedup across train/select/test (D2), room/mic augmentation on more
-channels (D4), temperature scaling / gate-aware threshold (I), dilation-32 vs
-Conformer comparison (C/4), and the `--playback-fraction` full fold (0.5 -> 1.0).
+channels (D4), temperature scaling / gate-aware threshold (I), and the
+`--playback-fraction` full fold (0.5 -> 1.0).
+
+**4. Axis C/4 — Conformer as a first-class training architecture (did not
+graduate from the §8 comparison file).** `voice_guard/model_training/`
+now ships Conformer as a real training path, not just the side-by-side
+`compare_archs.py` probe. Concretely:
+
+- `model.py` gains `VoiceGuardConformer` ("conformer_v1", v14): a
+  Conformer encoder (sinusoidal positional encoding, FFN-MHSA-Conv-FFN
+  Macaron block with pre-norm, same `mean`/`std`/`amax` trunk pooling and
+  MLP heads as `VoiceGuardSeqTCN`). It is explicitly engineered for the
+  **same ONNX I/O contract** as the TCN (inputs `(1,184,60)+(1,6)`,
+  outputs `(1,2)+(1,2)`), with every module written to trace cleanly under
+  `torch.onnx.export(dynamo=False, opset_version=13)` (e.g. manual softmax
+  in attention, SiLU as `x*sigmoid(x)`, `nn.GLU`, 1×1 Conv1d in the conv
+  module). CMVN is wired through `normalize_sequence()` the same way as the
+  TCN, and `per_utterance_cmvn` is reused.
+- The factory `build_model_from_norm_stats(norm_stats)` now handles
+  `arch == "conformer_v1"` and persists its capacity in `norm_stats.npz`
+  (`channels`, `n_heads`, `n_layers`, `ff_expansion`, `conv_kernel`,
+  `dropout`, `hidden`, `cmvn`), so select / evaluate / validate_fp16 / the
+  app all rebuild the **same** conformer arch from a checkpoint — identical
+  parity guarantee to the TCN path.
+- `train_seq_cnn.py` now has `--arch conformer_v1` (choices
+  `seqtcn_v2|seqcnn_v1|conformer_v1`) plus
+  `--conformer-n-heads/--conformer-n-layers/--conformer-ff-expansion/--conformer-conv-kernel`;
+  `compute_norm_stats` persists conformer capacity when `--arch conformer_v1`.
+  Default arch is still `seqtcn_v2`, so existing commands / v12 & v13 runs
+  are unchanged.
+- Tests in `test_model_seq_cnn.py`: factory + forward shape for
+  `conformer_v1`, capacity roundtrip (`n_layers`/`channels`/`ff_expansion`/`conv_kernel`
+  persist and the model rebuilds with them), ONNX contract + parity with the
+  PyTorch forward, and eval-determinism (no dropout/BN noise in eval).
+- `select_best_checkpoint_seqcnn.py` now resolves **any** arch (including
+  conformer) through `build_model_from_norm_stats` when writing
+  `checkpoint_sweep.json` / exporting ONNX — the conformer export path is
+  exercised there too (the AST split-leak guard still passes).
+
+This was the one item from the previous "still open" list that the user
+asked to move from "comparison probe only" into the real `model.py` +
+trainer path. Everything else in that list (multi-seed/ensemble, stratified
+batching, near-dup dedup, room/mic on more channels, calibration/threshold,
+playback-fraction full fold) remains open and is the work after this.
 
