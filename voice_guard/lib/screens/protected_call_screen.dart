@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -41,7 +42,11 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
     _scoreSub?.cancel();
     _scoreSub = audio.scoreStream.listen((score) {
       if (!mounted) return;
+      final wasAlert = risk.isAlert;
       risk.update(score, alertThreshold: settings.sensitivity);
+      if (!wasAlert && risk.isAlert) {
+        HapticFeedback.heavyImpact();
+      }
     });
 
     final signaling = SignalingService.connect(
