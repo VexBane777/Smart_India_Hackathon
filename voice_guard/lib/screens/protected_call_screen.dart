@@ -9,6 +9,7 @@ import '../services/audio_service.dart';
 import '../providers/risk_score_provider.dart';
 import '../providers/settings_provider.dart';
 import '../widgets/shad_risk_meter.dart';
+import '../widgets/shad_alert_banner.dart';
 import '../widgets/shad_card.dart';
 import '../widgets/shad_badge.dart';
 import '../widgets/shad_button.dart';
@@ -211,6 +212,9 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
                 ],
               ),
             ),
+            const SizedBox(height: ShadTokens.space4),
+
+            ShadAlertBanner(state: context.watch<RiskScoreProvider>().state),
             const SizedBox(height: ShadTokens.space4),
 
             // ── Central Risk Meter ──
