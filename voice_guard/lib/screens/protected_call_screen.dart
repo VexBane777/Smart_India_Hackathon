@@ -39,33 +39,55 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
     if (roomId.isEmpty) return;
     final audio = context.read<AudioService>();
     final risk = context.read<RiskScoreProvider>();
-    risk.reset();
-    audio.clearBuffer();
-    audio.startScoring();
-
     final settings = context.read<SettingsProvider>();
-    _scoreSub?.cancel();
-    _scoreSub = audio.scoreStream.listen((score) async {
-      if (!mounted) return;
-      final wasAlert = risk.isAlert;
-      risk.update(score, alertThreshold: settings.sensitivity);
-      if (!wasAlert && risk.isAlert) {
-        HapticFeedback.heavyImpact();
-        await _dumpForensicAudio(audio, risk);
-      }
-    });
 
-    final signaling = SignalingService.connect(
-      roomId,
-      host: settings.signalingHost,
-      port: settings.signalingPort,
-    );
-    final call = WebRtcCallService(audioService: audio, signaling: signaling);
-    call.connectionState.listen((s) {
-      if (mounted) setState(() => _state = s);
-    });
-    await call.startCall(roomId, isCaller: isCaller);
-    setState(() => _call = call);
+    try {
+      risk.reset();
+      audio.clearBuffer();
+      audio.startScoring();
+
+      _scoreSub?.cancel();
+      _scoreSub = audio.scoreStream.listen((score) async {
+        if (!mounted) return;
+        final wasAlert = risk.isAlert;
+        risk.update(score, alertThreshold: settings.sensitivity);
+        if (!wasAlert && risk.isAlert) {
+          HapticFeedback.heavyImpact();
+          await _dumpForensicAudio(audio, risk);
+        }
+      });
+
+      final signaling = SignalingService.connect(
+        roomId,
+        host: settings.signalingHost,
+        port: settings.signalingPort,
+      );
+      signaling.errors.listen((error) => _onConnectError(error, settings));
+      final call = WebRtcCallService(audioService: audio, signaling: signaling);
+      call.connectionState.listen((s) {
+        if (mounted) setState(() => _state = s);
+      });
+      await call.startCall(roomId, isCaller: isCaller);
+      setState(() => _call = call);
+    } catch (e) {
+      _onConnectError(e, settings);
+    }
+  }
+
+  void _onConnectError(Object error, SettingsProvider settings) {
+    debugPrint('Protected Call: connect failed: $error');
+    context.read<AudioService>().stopScoring();
+    _scoreSub?.cancel();
+    if (mounted) {
+      setState(() => _call = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "Couldn't reach signaling server at ${settings.signalingHost}:${settings.signalingPort} — check the address in Settings.",
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _hangUp() async {

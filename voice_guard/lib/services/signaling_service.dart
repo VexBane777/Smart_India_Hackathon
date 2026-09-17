@@ -10,12 +10,18 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 class SignalingService {
   final WebSocketChannel _channel;
   final _messagesCtrl = StreamController<Map<String, dynamic>>.broadcast();
+  final _errorsCtrl = StreamController<Object>.broadcast();
 
   SignalingService.withChannel(this._channel) {
-    _channel.stream.listen((frame) {
-      final decoded = jsonDecode(frame as String) as Map<String, dynamic>;
-      _messagesCtrl.add(decoded);
-    });
+    _channel.stream.listen(
+      (frame) {
+        final decoded = jsonDecode(frame as String) as Map<String, dynamic>;
+        _messagesCtrl.add(decoded);
+      },
+      onError: (Object error) {
+        _errorsCtrl.add(error);
+      },
+    );
   }
 
   factory SignalingService.connect(String roomId, {String host = '10.0.2.2', int port = 8001}) {
@@ -25,6 +31,11 @@ class SignalingService {
 
   Stream<Map<String, dynamic>> get messages => _messagesCtrl.stream;
 
+  /// Emits connection-level failures (e.g. an unreachable/wrong signaling
+  /// host) that would otherwise surface only as an uncaught exception deep
+  /// in the WebSocket stream's error channel.
+  Stream<Object> get errors => _errorsCtrl.stream;
+
   void send(Map<String, dynamic> message) {
     _channel.sink.add(jsonEncode(message));
   }
@@ -32,5 +43,6 @@ class SignalingService {
   Future<void> close() async {
     await _channel.sink.close();
     await _messagesCtrl.close();
+    await _errorsCtrl.close();
   }
 }
