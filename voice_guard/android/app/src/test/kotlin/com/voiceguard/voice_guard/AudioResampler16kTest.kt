@@ -61,6 +61,32 @@ class AudioResampler16kTest {
     }
 
     @Test
+    fun `buffer at JVM default byte order (BIG_ENDIAN) is still read as little-endian PCM16`() {
+        // Mirrors ByteBuffer.wrap(...) as flutter_webrtc's LocalAudioTrack constructs
+        // it for an AudioTrackSink: no .order(...) call at all, so it sits at the
+        // JVM default of BIG_ENDIAN. Deliberately NOT calling .order(LITTLE_ENDIAN)
+        // (and NOT explicitly setting BIG_ENDIAN either) to match that real condition.
+        val frames = 48000 * 100 / 1000 // 100ms -> exactly 1 output chunk
+        val amplitude = 20000.toShort()
+        val bytes = ByteArray(frames * 2)
+        for (i in 0 until frames) {
+            // Manually write little-endian bytes without touching ByteBuffer's order.
+            bytes[i * 2] = (amplitude.toInt() and 0xFF).toByte()
+            bytes[i * 2 + 1] = ((amplitude.toInt() shr 8) and 0xFF).toByte()
+        }
+        val buf = ByteBuffer.wrap(bytes)
+
+        val chunks = mutableListOf<ByteArray>()
+        val resampler = AudioResampler16k(onChunkReady = { chunks.add(it) })
+        resampler.processAudio(buf, sampleRate = 48000, channels = 1, frames = frames)
+
+        assertEquals(1, chunks.size)
+        val out = ByteBuffer.wrap(chunks[0]).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+        val outSamples = ShortArray(out.remaining()) { out.get(it) }
+        assertTrue(outSamples.all { it.toInt() == amplitude.toInt() })
+    }
+
+    @Test
     fun `output chunk size is always exactly 3200 bytes`() {
         val chunks = mutableListOf<ByteArray>()
         val resampler = AudioResampler16k(onChunkReady = { chunks.add(it) })

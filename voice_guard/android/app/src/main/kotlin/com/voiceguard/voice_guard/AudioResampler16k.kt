@@ -16,8 +16,14 @@ class AudioResampler16k(private val onChunkReady: (ByteArray) -> Unit) {
     private var chunkPos = 0
 
     fun processAudio(buffer: ByteBuffer, sampleRate: Int, channels: Int, frames: Int) {
-        val shortBuf = buffer.asShortBuffer()
+        // WebRTC PCM16 audio is little-endian; force it explicitly rather than
+        // inheriting the source buffer's order (defaults to BIG_ENDIAN, including
+        // buffers from ByteBuffer.wrap(...) as used by flutter_webrtc's
+        // LocalAudioTrack -> AudioTrackSink). Duplicate so we don't mutate the
+        // caller's buffer.
+        val shortBuf = buffer.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer()
         if (shortBuf.remaining() == 0 || frames == 0) return
+        if (shortBuf.remaining() < frames * channels) return
 
         val step = sampleRate.toDouble() / 16000.0
         var inIndex = 0.0
