@@ -20,6 +20,13 @@ import org.webrtc.AudioTrackSink
  * via the plugin's public getRemoteTrack(trackId) accessor — no reflection
  * into plugin internals, unlike flutter_webrtc's own package-private
  * WebRtcAudioTrackUtils hack used for its MediaRecorder feature.
+ *
+ * The raw buffers this sink receives are whatever rate/channel-count the
+ * remote track happens to be running at (typically 48kHz, possibly
+ * stereo) — not the 16kHz mono PCM16 the scoring pipeline expects. Each
+ * tap now routes through [AudioResampler16k] before [onData] fires, so
+ * callers always get 100ms/3200-byte 16kHz mono chunks regardless of the
+ * source format.
  */
 object RemoteAudioTap {
     private var sink: AudioTrackSink? = null
@@ -29,10 +36,9 @@ object RemoteAudioTap {
     fun attach(plugin: FlutterWebRTCPlugin, trackId: String, onData: (ByteArray) -> Unit): Boolean {
         val remoteTrack = plugin.getRemoteTrack(trackId) as? AudioTrack ?: return false
         detach()
-        val newSink = AudioTrackSink { buffer, _, _, _, _, _ ->
-            val bytes = ByteArray(buffer.remaining())
-            buffer.get(bytes)
-            onData(bytes)
+        val resampler = AudioResampler16k(onChunkReady = onData)
+        val newSink = AudioTrackSink { buffer, _, sampleRate, numberOfChannels, numberOfFrames, _ ->
+            resampler.processAudio(buffer, sampleRate, numberOfChannels, numberOfFrames)
         }
         remoteTrack.addSink(newSink)
         sink = newSink
