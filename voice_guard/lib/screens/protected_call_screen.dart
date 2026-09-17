@@ -6,6 +6,7 @@ import '../services/signaling_service.dart';
 import '../services/webrtc_call_service.dart';
 import '../services/audio_service.dart';
 import '../providers/risk_score_provider.dart';
+import '../providers/settings_provider.dart';
 import '../widgets/shad_risk_meter.dart';
 import '../widgets/shad_card.dart';
 import '../widgets/shad_badge.dart';
@@ -33,7 +34,12 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
     audio.clearBuffer();
     audio.startScoring();
 
-    final signaling = SignalingService.connect(roomId);
+    final settings = context.read<SettingsProvider>();
+    final signaling = SignalingService.connect(
+      roomId,
+      host: settings.signalingHost,
+      port: settings.signalingPort,
+    );
     final call = WebRtcCallService(audioService: audio, signaling: signaling);
     call.connectionState.listen((s) {
       if (mounted) setState(() => _state = s);
