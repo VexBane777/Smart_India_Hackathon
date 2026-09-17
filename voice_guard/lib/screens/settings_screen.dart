@@ -10,6 +10,7 @@ import '../utils/permissions.dart';
 import '../widgets/shad_card.dart';
 import '../widgets/shad_toggle.dart';
 import '../widgets/shad_button.dart';
+import '../widgets/shad_input.dart';
 import '../design/tokens.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -24,6 +25,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _hasOverlay = false;
   bool _hasPhonePerms = false;
   bool _calibrating = false;
+  final _signalingHostController = TextEditingController();
+  final _signalingPortController = TextEditingController();
 
   /// Voice calibration flow (re-wired after the PR #8 merge dropped the old
   /// settings section): starts native capture + scoring, records ~8 windows
@@ -71,6 +74,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _refresh();
+    final settings = context.read<SettingsProvider>();
+    _signalingHostController.text = settings.signalingHost;
+    _signalingPortController.text = settings.signalingPort.toString();
+  }
+
+  @override
+  void dispose() {
+    _signalingHostController.dispose();
+    _signalingPortController.dispose();
+    super.dispose();
   }
 
   Future<void> _refresh() async {
@@ -187,6 +200,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   Text(
                     'Lower = more sensitive (more alerts). Maps to "configurable thresholds per scenario" in the SIH brief.',
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      color: ShadTokens.muted,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Signaling host/port (VoIP relay address, e.g. a Tailscale IP)
+            ShadCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Signaling Server',
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: ShadTokens.foreground,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ShadInput(
+                    controller: _signalingHostController,
+                    placeholder: 'Signaling host (e.g. Tailscale IP)',
+                    onSubmitted: (v) => context.read<SettingsProvider>().setSignalingHost(v.trim()),
+                  ),
+                  const SizedBox(height: 8),
+                  ShadInput(
+                    controller: _signalingPortController,
+                    placeholder: 'Signaling port',
+                    keyboardType: TextInputType.number,
+                    onSubmitted: (v) {
+                      final port = int.tryParse(v.trim());
+                      if (port != null) context.read<SettingsProvider>().setSignalingPort(port);
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Points Protected Call at the relay used to connect two devices (defaults to the emulator loopback).',
                     style: GoogleFonts.inter(
                       fontSize: 11,
                       color: ShadTokens.muted,
