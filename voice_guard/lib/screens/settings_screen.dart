@@ -27,6 +27,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _calibrating = false;
   final _signalingHostController = TextEditingController();
   final _signalingPortController = TextEditingController();
+  final _signalingHostFocus = FocusNode();
+  final _signalingPortFocus = FocusNode();
 
   /// Voice calibration flow (re-wired after the PR #8 merge dropped the old
   /// settings section): starts native capture + scoring, records ~8 windows
@@ -77,12 +79,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final settings = context.read<SettingsProvider>();
     _signalingHostController.text = settings.signalingHost;
     _signalingPortController.text = settings.signalingPort.toString();
+    _signalingHostFocus.addListener(() {
+      if (!_signalingHostFocus.hasFocus) _saveSignalingHost();
+    });
+    _signalingPortFocus.addListener(() {
+      if (!_signalingPortFocus.hasFocus) _saveSignalingPort();
+    });
+  }
+
+  void _saveSignalingHost() {
+    context.read<SettingsProvider>().setSignalingHost(_signalingHostController.text.trim());
+  }
+
+  void _saveSignalingPort() {
+    final port = int.tryParse(_signalingPortController.text.trim());
+    if (port != null && port > 0 && port <= 65535) {
+      context.read<SettingsProvider>().setSignalingPort(port);
+    }
   }
 
   @override
   void dispose() {
     _signalingHostController.dispose();
     _signalingPortController.dispose();
+    _signalingHostFocus.dispose();
+    _signalingPortFocus.dispose();
     super.dispose();
   }
 
@@ -227,18 +248,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 8),
                   ShadInput(
                     controller: _signalingHostController,
+                    focusNode: _signalingHostFocus,
                     placeholder: 'Signaling host (e.g. Tailscale IP)',
-                    onSubmitted: (v) => context.read<SettingsProvider>().setSignalingHost(v.trim()),
+                    onSubmitted: (_) => _saveSignalingHost(),
                   ),
                   const SizedBox(height: 8),
                   ShadInput(
                     controller: _signalingPortController,
+                    focusNode: _signalingPortFocus,
                     placeholder: 'Signaling port',
                     keyboardType: TextInputType.number,
-                    onSubmitted: (v) {
-                      final port = int.tryParse(v.trim());
-                      if (port != null) context.read<SettingsProvider>().setSignalingPort(port);
-                    },
+                    onSubmitted: (_) => _saveSignalingPort(),
                   ),
                   const SizedBox(height: 6),
                   Text(

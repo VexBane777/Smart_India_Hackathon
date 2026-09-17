@@ -3,6 +3,7 @@ import '../design/tokens.dart';
 
 class ShadInput extends StatelessWidget {
   final TextEditingController? controller;
+  final FocusNode? focusNode;
   final String? placeholder;
   final String? label;
   final Widget? prefix;
@@ -17,6 +18,7 @@ class ShadInput extends StatelessWidget {
   const ShadInput({
     super.key,
     this.controller,
+    this.focusNode,
     this.placeholder,
     this.label,
     this.prefix,
@@ -62,6 +64,7 @@ class ShadInput extends StatelessWidget {
               Expanded(
                 child: TextField(
                   controller: controller,
+                  focusNode: focusNode,
                   onChanged: onChanged,
                   onSubmitted: onSubmitted,
                   keyboardType: keyboardType,
