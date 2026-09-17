@@ -33,6 +33,8 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
   WebRtcCallService? _call;
   RTCPeerConnectionState _state = RTCPeerConnectionState.RTCPeerConnectionStateNew;
   StreamSubscription<double>? _scoreSub;
+  StreamSubscription<Object>? _errorsSub;
+  SignalingService? _signaling;
 
   Future<void> _connect({required bool isCaller}) async {
     final roomId = _roomController.text.trim();
@@ -41,6 +43,7 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
     final risk = context.read<RiskScoreProvider>();
     final settings = context.read<SettingsProvider>();
 
+    WebRtcCallService? call;
     try {
       risk.reset();
       audio.clearBuffer();
@@ -62,41 +65,61 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
         host: settings.signalingHost,
         port: settings.signalingPort,
       );
-      signaling.errors.listen((error) => _onConnectError(error, settings));
-      final call = WebRtcCallService(audioService: audio, signaling: signaling);
+      _signaling = signaling;
+      await _errorsSub?.cancel();
+      _errorsSub = signaling.errors.listen((error) => _onConnectError(error, settings));
+      call = WebRtcCallService(audioService: audio, signaling: signaling);
       call.connectionState.listen((s) {
         if (mounted) setState(() => _state = s);
       });
       await call.startCall(roomId, isCaller: isCaller);
       setState(() => _call = call);
     } catch (e) {
-      _onConnectError(e, settings);
+      // startCall may have already acquired the mic/peer connection before
+      // throwing — tear down this specific local instance even though it
+      // was never assigned to _call (which _onConnectError otherwise cleans up).
+      await call?.endCall();
+      await _onConnectError(e, settings);
     }
   }
 
-  void _onConnectError(Object error, SettingsProvider settings) {
+  Future<void> _onConnectError(Object error, SettingsProvider settings) async {
     debugPrint('Protected Call: connect failed: $error');
+    // Checked first: a late error from a signaling attempt this screen has
+    // since torn down (dispose() already cancelled _errorsSub/_signaling)
+    // must not touch context or state.
+    if (!mounted) return;
     context.read<AudioService>().stopScoring();
-    _scoreSub?.cancel();
-    if (mounted) {
-      setState(() => _call = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "Couldn't reach signaling server at ${settings.signalingHost}:${settings.signalingPort} — check the address in Settings.",
-          ),
+    await _scoreSub?.cancel();
+    await _errorsSub?.cancel();
+    await _signaling?.close();
+    _signaling = null;
+    if (!mounted) return; // re-check: the awaits above are async gaps the widget could be disposed across
+    setState(() => _call = null);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          "Couldn't reach signaling server at ${settings.signalingHost}:${settings.signalingPort} — check the address in Settings.",
         ),
-      );
-    }
+      ),
+    );
   }
 
   Future<void> _hangUp() async {
     final audio = context.read<AudioService>();
     await _call?.endCall();
     await _scoreSub?.cancel();
+    await _errorsSub?.cancel();
+    await _signaling?.close();
+    _signaling = null;
     audio.stopScoring();
     setState(() => _call = null);
   }
+
+  /// Cap on how many forensic dumps this screen keeps on disk — a flappy
+  /// call (score oscillating around the alert threshold) would otherwise
+  /// write one ~160KB WAV per normal/warn->alert transition with no limit.
+  static const _maxForensicDumps = 10;
 
   Future<void> _dumpForensicAudio(AudioService audio, RiskScoreProvider risk) async {
     try {
@@ -113,8 +136,27 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
         verdict: Verdict.detected,
         recordingPath: path,
       ));
+      await _pruneOldForensicDumps(dir);
     } catch (e) {
       debugPrint('Protected Call: forensic dump failed: $e');
+    }
+  }
+
+  Future<void> _pruneOldForensicDumps(Directory dir) async {
+    final dumps = await dir
+        .list()
+        .where((e) => e is File && e.path.contains('/forensic_') && e.path.endsWith('.wav'))
+        .cast<File>()
+        .toList();
+    if (dumps.length <= _maxForensicDumps) return;
+    dumps.sort((a, b) => a.path.compareTo(b.path)); // filenames are ms-since-epoch -> lexicographic == chronological
+    final toDelete = dumps.length - _maxForensicDumps;
+    for (final f in dumps.take(toDelete)) {
+      try {
+        await f.delete();
+      } catch (e) {
+        debugPrint('Protected Call: failed to prune old forensic dump ${f.path}: $e');
+      }
     }
   }
 
@@ -122,6 +164,8 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
   void dispose() {
     _call?.dispose();
     _scoreSub?.cancel();
+    _errorsSub?.cancel();
+    _signaling?.close();
     _roomController.dispose();
     super.dispose();
   }
