@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -24,6 +25,7 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
   final _roomController = TextEditingController();
   WebRtcCallService? _call;
   RTCPeerConnectionState _state = RTCPeerConnectionState.RTCPeerConnectionStateNew;
+  StreamSubscription<double>? _scoreSub;
 
   Future<void> _connect({required bool isCaller}) async {
     final roomId = _roomController.text.trim();
@@ -35,6 +37,12 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
     audio.startScoring();
 
     final settings = context.read<SettingsProvider>();
+    _scoreSub?.cancel();
+    _scoreSub = audio.scoreStream.listen((score) {
+      if (!mounted) return;
+      risk.update(score, alertThreshold: settings.sensitivity);
+    });
+
     final signaling = SignalingService.connect(
       roomId,
       host: settings.signalingHost,
@@ -51,6 +59,7 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
   Future<void> _hangUp() async {
     final audio = context.read<AudioService>();
     await _call?.endCall();
+    await _scoreSub?.cancel();
     audio.stopScoring();
     setState(() => _call = null);
   }
@@ -58,6 +67,7 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
   @override
   void dispose() {
     _call?.dispose();
+    _scoreSub?.cancel();
     _roomController.dispose();
     super.dispose();
   }
