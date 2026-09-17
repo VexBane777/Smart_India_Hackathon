@@ -198,6 +198,33 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // Speaker playback during "Test with audio file" scans, so the user
+        // can hear what the model is analyzing. Ported from vaani/mobile.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.voiceguard/playback")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> result.success(AudioPlaybackBridge.start())
+                    "playChunk" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val samples = call.argument<List<Int>>("samples")!!
+                        AudioPlaybackBridge.playChunk(samples)
+                        result.success(null)
+                    }
+                    "setMuted" -> {
+                        val mute = call.argument<Boolean>("muted")!!
+                        AudioPlaybackBridge.setMuted(mute)
+                        result.success(null)
+                    }
+                    "stop" -> {
+                        AudioPlaybackBridge.stop()
+                        result.success(null)
+                    }
+                    "isPlaying" -> result.success(AudioPlaybackBridge.isPlaying())
+                    "isMuted" -> result.success(AudioPlaybackBridge.isMuted())
+                    else -> result.notImplemented()
+                }
+            }
+
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, eventChannel).setStreamHandler(
             object : EventChannel.StreamHandler {
                 override fun onListen(args: Any?, sink: EventChannel.EventSink) {
@@ -328,6 +355,7 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         PlaybackCaptureManager.stop()
         pendingMediaProjection?.stop()
+        AudioPlaybackBridge.stop()
         super.onDestroy()
         if (instance == this) {
             instance = null

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../utils/audio_processor.dart';
+import 'audio_playback_bridge.dart';
 import 'tflite_service.dart';
 
 import 'dart:math' as math;
@@ -33,6 +34,8 @@ class AudioService {
   Timer? _timer;
   bool _scoring = false;
   bool _fileScanning = false;
+  final _playback = AudioPlaybackBridge();
+  bool _playbackMuted = false;
   final _scoreCtrl = StreamController<double>.broadcast();
   final _pcmCtrl = StreamController<List<double>>.broadcast();
   final _rmsCtrl = StreamController<double>.broadcast();
@@ -139,6 +142,16 @@ class AudioService {
   /// Cancels an in-flight [scanAudioFile] loop (checked between windows).
   void stopAudioFileScoring() => _fileScanning = false;
 
+  /// Mute/unmute speaker playback during an in-flight [scanAudioFile] —
+  /// scoring is unaffected either way. Ported from vaani/mobile's file-scan
+  /// playback UX (AudioPlaybackBridge).
+  Future<void> setFileScanMuted(bool muted) async {
+    _playbackMuted = muted;
+    await _playback.setMuted(muted);
+  }
+
+  bool get isFileScanMuted => _playbackMuted;
+
   /// (peakDbFS, noiseFloorDbFS) for a scoring window — cheap strided scan
   /// (every 8th sample; 10th percentile as a noise-floor proxy). Pure
   /// instrumentation for the Monitor/AudioScan logs; never used in the
@@ -184,6 +197,8 @@ class AudioService {
     if (pcm.isEmpty) return 'empty audio';
 
     _fileScanning = true;
+    _playbackMuted = false;
+    await _playback.start();
     const win = AudioProcessor.chunkSamples; // 48000 == 3s @ 16k
     const hop = 8000; // 0.5s sliding hop
     if (pcm.length < win) {
@@ -193,9 +208,17 @@ class AudioService {
     debugPrint('AudioScan: ${pcm.length} samples (~${(pcm.length / AudioProcessor.sampleRate).toStringAsFixed(1)}s), '
         '${(lastStart ~/ hop) + 1} scoring windows');
     int i = 0;
+    bool firstWindow = true;
     while (i <= lastStart && _fileScanning) {
       final chunk = pcm.sublist(i, i + win);
       final windowT = i / AudioProcessor.sampleRate;
+
+      // Play only the audio newly revealed by this hop (the full window the
+      // first time, since earlier windows overlap by win-hop samples) —
+      // otherwise each overlapping window would replay audio already heard.
+      final toPlay = firstWindow ? chunk : chunk.sublist(chunk.length - hop);
+      await _playback.playChunk(toPlay);
+      firstWindow = false;
 
       double sumSq = 0;
       for (final s in chunk) { sumSq += s * s; }
@@ -226,9 +249,15 @@ class AudioService {
       }
       _pcmCtrl.add(wave);
 
-      await Future.delayed(const Duration(milliseconds: 40));
+      // Paced to real hop duration (0.5s) while audible so playback sounds
+      // right; falls back to the original fast scan speed while muted.
+      final stepDelay = _playbackMuted
+          ? const Duration(milliseconds: 40)
+          : Duration(milliseconds: (hop / AudioProcessor.sampleRate * 1000).round());
+      await Future.delayed(stepDelay);
       i += hop;
     }
+    await _playback.stop();
     _fileScanning = false;
     debugPrint('AudioScan: finished at t=${(i / AudioProcessor.sampleRate).toStringAsFixed(1)}s');
     return i > lastStart ? null : 'cancelled';

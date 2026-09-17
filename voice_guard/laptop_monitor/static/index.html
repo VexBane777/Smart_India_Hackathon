@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VoiceGuard — laptop diagnostic console</title>
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="dot" id="conn-dot"></span>
+    <strong>VoiceGuard</strong>
+    <span class="muted">laptop diagnostic console</span>
+  </div>
+  <div class="identity">
+    <span class="muted">model</span><code id="model-sha">—</code>
+    <span class="muted">backend</span><code id="backend-url">—</code>
+    <span class="muted">link</span><code id="conn-status">connecting…</code>
+  </div>
+</header>
+
+<!-- ============ AI RATING (top) ============ -->
+<section class="rating" id="rating-card">
+  <div class="gauge-wrap">
+    <svg viewBox="0 0 200 200" class="gauge" aria-hidden="true">
+      <path id="arc-track" d="" />
+      <path id="arc-value" d="" />
+      <line id="arc-threshold" x1="0" y1="0" x2="0" y2="0" />
+    </svg>
+    <div class="gauge-centre">
+      <div class="pct" id="ai-rating-pct">0%</div>
+      <div class="pct-label">AI rating</div>
+      <div class="raw-ema">raw <span id="ai-rating-raw">—</span> · ema <span id="ai-rating-ema">—</span></div>
+    </div>
+  </div>
+
+  <div class="rating-side">
+    <div class="pill" id="ai-rating-verdict">NO DATA</div>
+    <div class="chips">
+      <span class="chip">state <b id="ai-state">—</b></span>
+      <span class="chip">consec <b id="ai-consecutive">—</b></span>
+      <span class="chip">threshold <b id="ai-threshold">—</b></span>
+      <span class="chip">attack <b id="ai-rating-attack">—</b></span>
+    </div>
+    <div class="chips">
+      <span class="chip">window <b id="window-index">—</b></span>
+      <span class="chip">t <b id="window-t">—</b> s</span>
+      <span class="chip">rms <b id="window-rms">—</b> dBFS</span>
+      <span class="chip">e2e <b id="window-e2e">—</b> ms</span>
+    </div>
+    <svg class="spark" viewBox="0 0 300 60" preserveAspectRatio="none" aria-label="score history">
+      <line class="spark-thresh" id="spark-threshold" x1="0" y1="0" x2="300" y2="0" />
+      <polyline id="spark-raw" points="" />
+      <polyline id="spark-ema" points="" />
+    </svg>
+    <div class="legend">
+      <span><i class="sw verified"></i>0–30% verified human</span>
+      <span><i class="sw suspicious"></i>31–70% suspicious</span>
+      <span><i class="sw detected"></i>71–100% AI detected</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ROW: controls | LOG | diff ============ -->
+<main class="grid">
+  <aside class="rail">
+    <h2>Pipeline</h2>
+    <div class="kv">
+      <div><span class="muted">window</span><b id="cfg-window">—</b></div>
+      <div><span class="muted">hop</span><b id="cfg-hop">—</b></div>
+      <div><span class="muted">speed</span><b id="cfg-speed">—</b></div>
+      <div><span class="muted">model loaded</span><b id="cfg-model-loaded">—</b></div>
+      <div><span class="muted">contract</span><b id="cfg-contract">—</b></div>
+      <div><span class="muted">decoder</span><b id="cfg-decoder">—</b></div>
+      <div><span class="muted">source</span><b id="cfg-source">—</b></div>
+    </div>
+
+    <h2>Source</h2>
+    <select id="source-select" size="6"></select>
+    <input id="source-path" type="text" placeholder="or paste an absolute path (.wav)" />
+    <div class="btn-row">
+      <input id="file-import" class="file-input"
+             type="file" accept=".wav,.flac,.ogg,.aiff,.aif" />
+    </div>
+    <div class="btn-row">
+      <button id="btn-start" class="primary">Start</button>
+      <button id="btn-stop">Stop</button>
+    </div>
+
+    <h2>Controls</h2>
+    <div class="btn-row">
+      <button id="btn-pause">Pause</button>
+      <button id="btn-resume">Resume</button>
+      <button id="btn-step">Step 1 window</button>
+    </div>
+    <label class="slider">threshold <b id="lbl-threshold">0.60</b>
+      <input id="input-threshold" type="range" min="0" max="1" step="0.01" value="0.6" />
+    </label>
+    <label class="slider">speed (0 = fast) <b id="lbl-speed">1.0</b>
+      <input id="input-speed" type="range" min="0" max="4" step="0.5" value="1" />
+    </label>
+    <label class="slider">hop (samples) <b id="lbl-hop">8000</b>
+      <input id="input-hop" type="range" min="1000" max="48000" step="1000" value="8000" />
+    </label>
+    <div class="btn-row">
+      <label class="check"><input id="input-loop" type="checkbox" /> loop</label>
+      <label class="check"><input id="input-backend" type="checkbox" checked /> compare backend</label>
+    </div>
+    <div class="btn-row">
+      <select id="backend-mode">
+        <option value="model">backend mode: same model</option>
+        <option value="heuristic">backend mode: legacy heuristic</option>
+      </select>
+    </div>
+    <div class="btn-row">
+      <button id="btn-reload">Reload model</button>
+      <button id="btn-clear">Clear log</button>
+    </div>
+  </aside>
+
+  <!-- ============ DIAGNOSTIC LOG (centre) ============ -->
+  <section class="log-panel">
+    <div class="log-head">
+      <h2>Diagnostic log <span class="muted" id="log-count">0 lines</span></h2>
+      <div class="log-tools">
+        <input id="log-search" type="search" placeholder="filter text…" />
+        <select id="log-stage"><option value="">all stages</option></select>
+        <select id="log-sev">
+          <option value="">all severities</option>
+          <option value="debug">debug</option>
+          <option value="info">info</option>
+          <option value="warn">warn</option>
+          <option value="error">error</option>
+        </select>
+        <label class="check"><input id="log-follow" type="checkbox" checked /> follow</label>
+        <button id="btn-copy">Copy</button>
+        <button id="btn-download">NDJSON</button>
+      </div>
+    </div>
+    <ol id="diag-log" class="log"></ol>
+  </section>
+
+  <aside class="rail">
+    <h2>Backend diff</h2>
+    <div class="kv">
+      <div><span class="muted">local raw</span><b id="diff-local">—</b></div>
+      <div><span class="muted">backend raw</span><b id="diff-backend">—</b></div>
+      <div><span class="muted">delta raw</span><b id="diff-delta">—</b></div>
+      <div><span class="muted">backend ema</span><b id="diff-backend-ema">—</b></div>
+      <div><span class="muted">verdict local / backend</span><b id="diff-verdict">—</b></div>
+      <div><span class="muted">scorer</span><b id="diff-scorer">—</b></div>
+      <div><span class="muted">http</span><b id="diff-http">—</b></div>
+    </div>
+    <div class="flags" id="diff-flags"></div>
+
+    <h2>Run tally</h2>
+    <div class="kv">
+      <div><span class="muted">scored / silent</span><b id="tally-windows">—</b></div>
+      <div><span class="muted">agree %</span><b id="tally-agree">—</b></div>
+      <div><span class="muted">diverged</span><b id="tally-diverge">—</b></div>
+      <div><span class="muted">band mismatches</span><b id="tally-band">—</b></div>
+      <div><span class="muted">mean |Δ raw|</span><b id="tally-delta">—</b></div>
+      <div><span class="muted">backend errors</span><b id="tally-errors">—</b></div>
+      <div><span class="muted">alerts</span><b id="tally-alerts">—</b></div>
+      <div><span class="muted">e2e p50 / p95 ms</span><b id="tally-latency">—</b></div>
+    </div>
+
+    <h2>Stage activity</h2>
+    <table class="stages" id="stage-table">
+      <thead><tr><th>stage</th><th>count</th><th>last ms</th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <h2>Agent monitor</h2>
+    <div class="monitor-links">
+      <a href="/monitor.json" target="_blank">/monitor.json</a>
+      <a href="/monitor.txt" target="_blank">/monitor.txt</a>
+      <a href="/logs.ndjson" target="_blank">/logs.ndjson</a>
+      <a href="/events" target="_blank">/events (SSE)</a>
+      <a href="/docs" target="_blank">/docs</a>
+    </div>
+    <pre id="monitor-json" class="json">—</pre>
+  </aside>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

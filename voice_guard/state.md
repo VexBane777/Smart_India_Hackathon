@@ -1828,6 +1828,38 @@ is no longer on disk) across trainer/model/selector/protocol/cache/features/data
 suites, run detached via `model_training/_rework_tests.cmd` →
 `runs/_rework_tests.log`.
 
+## v13 deployed anyway, by explicit user override (2026-09-17) — confound gate still FAILS
+
+`eval_v13_test/report.md`'s own decision line reads `deploy: False`. **The user
+explicitly instructed deploying it over the existing v11 anyway**, having been shown
+the gate scorecard first (confound gate FAIL — same 9/14 rows as documented above:
+real:zcrVariance/shimmer/hnr_db; fake:energyVariance/zcrVariance/jitter/shimmer/
+hnr_db/pad_fraction — vs. the three PASSing gates: headline EER 0.3149 vs v11's
+0.4853, acoustic/playback EER 0.2755 vs 0.4925, attack-head 0.750/76.6%). This is the
+same style-vs-entity confound as v12
+(`docs/CRITICAL-entity-vs-style-confound.md`) — **not fixed**, only shipped anyway.
+
+What was done: exported `runs/voice_guard_v13_selected/model.pt` (arch `seqtcn_v2`,
+built from its persisted `norm_stats.npz`) via `model.export_onnx()` — confirmed
+byte-for-byte-equivalent I/O contract to the previous deployed model (`lfcc_sequence`
+[1,184,60], `scalars` [1,6] → `real_fake_logits`/`attack_type_logits` [1,2]), and
+numeric parity vs. the PyTorch checkpoint (max abs diff 1.2e-7 over 20 random probes,
+post-sigmoid) — matches the already-committed `fp16_validation_v13.json` result
+(`pass: true`, max_abs_delta_p 0.0008). Copied over
+`assets/models/voice_detector.onnx`. Previous (v11) model backed up to
+the session scratchpad, NOT committed to the repo (not needed there — git history
+has it, `HEAD~1:voice_guard/assets/models/voice_detector.onnx`, if a rollback is
+ever needed).
+
+**Not done, and still needed before trusting this in practice:** on-device
+verification (Live Mic Test + "Test with audio file", per the standing checklist
+above) — this swap has only been verified by ONNX Runtime parity/sanity checks on
+the training box, not on the phone. Given the known confound, expect the
+practical symptom described at the top of this file: real speech in a
+controlled/monotone register may false-flag, and natural-sounding fakes may slip
+through — this was not fixed by v13, only traded for a better headline/acoustic
+number. Treat this deploy as a deliberate risk acceptance, not a resolved gate.
+
 ## How to keep this file useful
 
 - Update the "Current status" date and paragraph at the *start* of a

@@ -33,6 +33,7 @@ class _CallScreenState extends State<CallScreen> {
   bool _liveMicActive = false;
   bool _detectionActive = false;
   bool _fileScanActive = false;
+  bool _fileScanMuted = false;
   bool _isDefaultDialer = false;
   DateTime? _callStartTime;
   List<double> _liveWaveform = const [];
@@ -239,6 +240,7 @@ class _CallScreenState extends State<CallScreen> {
       _liveMicActive = false;
       _detectionActive = false;
       _fileScanActive = true;
+      _fileScanMuted = false;
     });
     callState.setStatus(CallStatus.active, number: 'Audio file scan');
     risk.reset();
@@ -630,12 +632,31 @@ class _CallScreenState extends State<CallScreen> {
             children: [
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: const [
-                  Text(
+                children: [
+                  const Text(
                     'Microphone Telephony Stream',
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: ShadTokens.foreground),
                   ),
-                  ShadBadge(label: '16 kHz PCM', variant: ShadBadgeVariant.outline),
+                  Row(
+                    children: [
+                      if (_fileScanActive) ...[
+                        GestureDetector(
+                          onTap: () {
+                            final next = !_fileScanMuted;
+                            context.read<AudioService>().setFileScanMuted(next);
+                            setState(() => _fileScanMuted = next);
+                          },
+                          child: Icon(
+                            _fileScanMuted ? LucideIcons.volumeX : LucideIcons.volume2,
+                            size: 16,
+                            color: ShadTokens.muted,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      const ShadBadge(label: '16 kHz PCM', variant: ShadBadgeVariant.outline),
+                    ],
+                  ),
                 ],
               ),
               const SizedBox(height: 12),
