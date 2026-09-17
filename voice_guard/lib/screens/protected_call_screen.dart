@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:path_provider/path_provider.dart';
 import '../services/signaling_service.dart';
 import '../services/webrtc_call_service.dart';
 import '../services/audio_service.dart';
@@ -16,6 +18,9 @@ import '../widgets/shad_badge.dart';
 import '../widgets/shad_button.dart';
 import '../widgets/shad_input.dart';
 import '../design/tokens.dart';
+import '../models/call_log.dart';
+import '../models/risk_score.dart';
+import '../utils/wav_encoder.dart';
 
 class ProtectedCallScreen extends StatefulWidget {
   const ProtectedCallScreen({super.key});
@@ -40,12 +45,13 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
 
     final settings = context.read<SettingsProvider>();
     _scoreSub?.cancel();
-    _scoreSub = audio.scoreStream.listen((score) {
+    _scoreSub = audio.scoreStream.listen((score) async {
       if (!mounted) return;
       final wasAlert = risk.isAlert;
       risk.update(score, alertThreshold: settings.sensitivity);
       if (!wasAlert && risk.isAlert) {
         HapticFeedback.heavyImpact();
+        await _dumpForensicAudio(audio, risk);
       }
     });
 
@@ -68,6 +74,26 @@ class _ProtectedCallScreenState extends State<ProtectedCallScreen> {
     await _scoreSub?.cancel();
     audio.stopScoring();
     setState(() => _call = null);
+  }
+
+  Future<void> _dumpForensicAudio(AudioService audio, RiskScoreProvider risk) async {
+    try {
+      final samples = audio.snapshotBuffer();
+      final wavBytes = WavEncoder.encodePcm16Mono(samples, sampleRate: 16000);
+      final dir = await getApplicationDocumentsDirectory();
+      final path = '${dir.path}/forensic_${DateTime.now().millisecondsSinceEpoch}.wav';
+      await File(path).writeAsBytes(wavBytes);
+      risk.addCallLog(CallLog(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        timestamp: DateTime.now(),
+        number: 'Protected Call: ${_roomController.text.trim()}',
+        riskScore: risk.current?.score ?? 0.0,
+        verdict: Verdict.detected,
+        recordingPath: path,
+      ));
+    } catch (e) {
+      debugPrint('Protected Call: forensic dump failed: $e');
+    }
   }
 
   @override
