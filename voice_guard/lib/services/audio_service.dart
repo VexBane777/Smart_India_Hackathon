@@ -139,6 +139,10 @@ class AudioService {
 
   void clearBuffer() => _buffer.clear();
 
+  /// Copy of the last ~5s of raw PCM (see [ingestBytes]'s maxSamples cap) —
+  /// used for the Protected Call forensic dump when an alert fires.
+  List<double> snapshotBuffer() => List.unmodifiable(_buffer);
+
   /// Cancels an in-flight [scanAudioFile] loop (checked between windows).
   void stopAudioFileScoring() => _fileScanning = false;
 
