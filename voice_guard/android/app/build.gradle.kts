@@ -78,4 +78,6 @@ dependencies {
     // Must match flutter_webrtc's own pinned version (see its
     // android/build.gradle) to guarantee binary compatibility at runtime.
     compileOnly("io.github.webrtc-sdk:android:125.6422.03")
+
+    testImplementation("junit:junit:4.13.2")
 }
