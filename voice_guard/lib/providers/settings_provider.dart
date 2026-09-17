@@ -7,12 +7,16 @@ class SettingsProvider extends ChangeNotifier {
   bool _soundEnabled = true;
   double _sensitivity = 0.60; // alert threshold, matches engine_mock.py's ALERT_THRESHOLD
   bool _onboardingDone = false;
+  String _signalingHost = '10.0.2.2';
+  int _signalingPort = 8001;
 
   bool get protectionEnabled => _protectionEnabled;
   bool get overlayEnabled => _overlayEnabled;
   bool get soundEnabled => _soundEnabled;
   double get sensitivity => _sensitivity;
   bool get onboardingDone => _onboardingDone;
+  String get signalingHost => _signalingHost;
+  int get signalingPort => _signalingPort;
 
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
@@ -21,6 +25,8 @@ class SettingsProvider extends ChangeNotifier {
     _soundEnabled = p.getBool('soundEnabled') ?? true;
     _sensitivity = p.getDouble('sensitivity') ?? 0.60;
     _onboardingDone = p.getBool('onboardingDone') ?? false;
+    _signalingHost = p.getString('signalingHost') ?? '10.0.2.2';
+    _signalingPort = p.getInt('signalingPort') ?? 8001;
     notifyListeners();
   }
 
@@ -51,6 +57,18 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> setOnboardingDone(bool v) async {
     _onboardingDone = v;
     (await SharedPreferences.getInstance()).setBool('onboardingDone', v);
+    notifyListeners();
+  }
+
+  Future<void> setSignalingHost(String v) async {
+    _signalingHost = v;
+    (await SharedPreferences.getInstance()).setString('signalingHost', v);
+    notifyListeners();
+  }
+
+  Future<void> setSignalingPort(int v) async {
+    _signalingPort = v;
+    (await SharedPreferences.getInstance()).setInt('signalingPort', v);
     notifyListeners();
   }
 
