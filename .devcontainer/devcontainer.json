@@ -1,0 +1,38 @@
+{
+  "name": "SIH (VoiceGuard / VAANI / nyaya)",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/java:1": {
+      "version": "17",
+      "installMaven": false,
+      "installGradle": false
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "onCreateCommand": "bash .devcontainer/setup.sh",
+  "postStartCommand": "bash .devcontainer/post-start.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "Dart-Code.dart-code",
+        "Dart-Code.flutter",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "redhat.java",
+        "vscjava.vscode-gradle",
+        "eamodio.gitlens"
+      ]
+    }
+  },
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:/opt/flutter/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools"
+  },
+  "forwardPorts": [8001, 8010],
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb"
+  }
+}
