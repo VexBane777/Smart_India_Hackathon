@@ -4,11 +4,13 @@
 
 **Goal:** Build and run the combined Idea-1/Idea-3 feasibility spike — a small-scale raw-waveform AASIST-lite trunk with three depth-staged auxiliary heads (VAD / human-fake / language) plus a gradient-reversal adversarial style-suppression head — and score it against the same `measure_confound.py`-lineage gate the deployed model has failed three times, so the project can decide (data-backed, not felt) whether to commit the rest of the 3-month architecture budget or pivot to corpus/hard-negative work instead. Also closes the one loose end on the already-shipped per-speaker calibration track (Idea 1, Track 1): its on-device manual check.
 
-**Architecture:** Everything in this plan is additive and spike-scoped: new files only, nothing in the production LFCC pipeline (`dataset.py`, `feature_cache.py`, `train_seq_cnn.py`, `evaluate.py`, `model.py`) is modified. A parallel raw-PCM cache (`raw_pcm_cache.py`) reuses the existing windowing primitives (`dataset.load_audio`, `trim_edge_silence`, `apply_channel`, `pad_to_window`, `stable_seed`) without touching `dataset.Window` or its 20+ existing tests. A new model file (`spike_model.py`) builds the AASIST-lite trunk (SincNet-style frontend + residual blocks banded into early/mid/late) and a `MultiHeadSpike` wrapper with the VAD, human-fake, language and GRL-style-adversarial heads. The confound *gate itself* is reused unmodified from `evaluate.py` (`confound_table`) — this plan does not reimplement the statistics, only feeds them new numbers.
+**Folded in, 2026-09-18 (Ideas 4–6):** three later brainstorm ideas extend this same spike rather than starting a new one. **Idea 5** (per-attack-family specialist heads) is an additive variant of the Task 3 model and Task 7 training loop — Task 12 adds it as a flag-selectable option so Task 10's decision run can compare baseline-shared-head-BCE vs. specialist-heads on the same corpus and same confound gate. **Idea 6** (OC-Softmax one-class objective) has two independent paths: Task 13 adds it as a spike variant (same as Idea 5, gated on the AASIST spike actually running), but — per a correction made this session, see the brainstorm doc's Idea 6 section — OC-Softmax doesn't actually need the AASIST spike at all, since the pooled→frame-level feature swap it was thought to depend on already shipped as the currently-deployed v13 model. **Task 15 tests it directly against v13**, independent of whether Tasks 1–11's spike ever runs. **Idea 4** (manual dataset pruning) is not spike code at all — it's a corpus-quality precondition — but it directly affects what Task 10 trains on, so Task 14 makes checking its status an explicit pre-Task-10 step rather than a silent assumption that today's corpus is the right one to spike against.
+
+**Architecture:** Everything in this plan is additive and spike-scoped: new files only, nothing in the production LFCC pipeline (`dataset.py`, `feature_cache.py`, `train_seq_cnn.py`, `evaluate.py`, `model.py`) is modified. A parallel raw-PCM cache (`raw_pcm_cache.py`) reuses the existing windowing primitives (`dataset.load_audio`, `trim_edge_silence`, `apply_channel`, `pad_to_window`, `stable_seed`) without touching `dataset.Window` or its 20+ existing tests. A new model file (`spike_model.py`) builds the AASIST-lite trunk (SincNet-style frontend + residual blocks banded into early/mid/late) and a `MultiHeadSpike` wrapper with the VAD, human-fake, language and GRL-style-adversarial heads. The confound *gate itself* is reused unmodified from `evaluate.py` (`confound_table`) — this plan does not reimplement the statistics, only feeds them new numbers. Idea 5/6's additions (Tasks 12–13) follow the same rule: `MultiHeadSpike` gains new optional heads/outputs, nothing existing is removed, and `score_spike_confound.py`/`train_spike_aasist.py` gain flags, not forks.
 
 **Tech Stack:** Python, PyTorch, numpy, soundfile/librosa (existing deps only — no new packages).
 
-**Spec:** `voice_guard/docs/superpowers/specs/2026-09-17-vaani-model-architecture-brainstorm.md` (Ideas 1–3) and the consolidated recommendation given in this conversation (backbone = Idea 1's gated phased plan; Phase 0's spike = Idea 3 Approach C trained on an AASIST-lite trunk; three-signal gate; calibration ships independently). Executors should read Idea 1 and Idea 3 in full before starting — this plan implements their "Phase 0" and "Track 1 verification" only, not Phases 1–5 (see the Roadmap section at the end, which is deliberately NOT a task list).
+**Spec:** `voice_guard/docs/superpowers/specs/2026-09-17-vaani-model-architecture-brainstorm.md` (Ideas 1–6, Idea 6 corrected 2026-09-18 — its feature-extraction dependency was overstated, see that section) and the consolidated recommendation given in this conversation (backbone = Idea 1's gated phased plan; Phase 0's spike = Idea 3 Approach C trained on an AASIST-lite trunk, extended by Idea 5's specialist heads and Idea 6's one-class objective as comparison variants; three-signal gate; calibration ships independently; Idea 4 gates what corpus Task 10 trains on). Executors should read Ideas 1, 3, 4, 5 and 6 in full before starting Tasks 12–15 — this plan implements Ideas 1/3's "Phase 0" and "Track 1 verification" (Tasks 1–11, already committed) plus Ideas 4/5/6's fold-in (Task 12: Idea 5; Task 13: Idea 6 as a spike variant; Task 14: Idea 4's pruning-status gate; Task 15: Idea 6 tested standalone against the deployed v13 model, no spike dependency), not Phases 1–5 (see the Roadmap section at the end, which is deliberately NOT a task list). **Task 15 has no prerequisite among Tasks 1–14 except Task 13's `oc_softmax.py` module** — it can be executed first, in isolation, and is the fastest way to get real evidence on Idea 6.
 
 ## Global Constraints
 
@@ -31,7 +33,11 @@
 | `model_training/train_spike_aasist.py` | Training entrypoint: builds the model, runs the joint loss, logs the gradient diagnostic, checkpoints. |
 | `model_training/score_spike_confound.py` | Scores a spike checkpoint on the held-out split and runs it through `evaluate.confound_table` (imported, not reimplemented). |
 | `model_training/export_spike_onnx.py` | Best-effort ONNX export of a spike checkpoint + a CPU latency proxy benchmark. |
-| `model_training/docs/2026-09-XX-phase0-spike-decision.md` | The recorded go/no-go decision (Task 10's deliverable). |
+| `model_training/docs/2026-09-XX-phase0-spike-decision.md` | The recorded go/no-go decision (Task 10's deliverable) — now also records the specialist-heads and OC-Softmax comparison (Tasks 12–13) and the pruning-status check (Task 14). |
+| `model_training/oc_softmax.py` | (Task 13, Idea 6) `OCSoftmaxLoss` — one-class softmax objective on `MultiHeadSpike`'s mid-band embedding. |
+| `model_training/docs/2026-09-XX-pruning-status-check.md` | (Task 14, Idea 4) Recorded pruning-plan status at spike time, and which corpus variant Task 10 actually trained on. |
+| `model_training/finetune_oc_softmax_v13.py` | (Task 15, Idea 6) OC-Softmax fine-tune directly on the **already-deployed v13 SeqTCN** — reuses `oc_softmax.py`, no dependency on the AASIST spike (Tasks 1–11) or its unexecuted status. |
+| `model_training/docs/2026-09-XX-oc-softmax-v13-result.md` | (Task 15) The confound-gate result of OC-Softmax on v13, independent of the Task 10 spike decision. |
 
 ---
 
@@ -1545,10 +1551,12 @@ git commit -m "feat(voice_guard): add ONNX export and CPU latency proxy for the 
 
 This task is the actual experiment, not more library code — it has no new source file to TDD, but it is where Tasks 1–9 pay off. Do not skip it or treat Task 9 passing its unit tests as equivalent to running it.
 
+**Run Task 14 first** (dataset-pruning status check, Idea 4) — it determines which corpus this task trains on. Then run this task's Steps 1–4 **three times**: once with the baseline shared head (Tasks 1–9 as originally written), once with `--use-specialist-heads` (Task 12, Idea 5), and once with `--loss-objective oc-softmax` (Task 13, Idea 6) — same cache, same seeds, same held-out split across all three, so the comparison in Step 6 isolates the objective/head choice and nothing else.
+
 **Files:**
 - Create: `model_training/docs/2026-09-XX-phase0-spike-decision.md` (replace `XX` with the actual date)
 
-- [ ] **Step 1: Build the training cache** on a real (not synthetic-test) subset. Reuse `corpus.TRAIN_SETS_V12` for real/fake dirs and `eval_protocol.TRAIN_CHANNELS` for channels — same corpus definitions the production trainer uses, so this spike is trained on data comparable to v11–v13, not a different distribution. A few thousand files per class is enough for a feasibility read (this is explicitly NOT a full training run).
+- [ ] **Step 1: Build the training cache** on a real (not synthetic-test) subset. Reuse `corpus.TRAIN_SETS_V12` for real/fake dirs and `eval_protocol.TRAIN_CHANNELS` for channels — same corpus definitions the production trainer uses, so this spike is trained on data comparable to v11–v13, not a different distribution (unless Task 14 found a pruned corpus to use instead — see that task). A few thousand files per class is enough for a feasibility read (this is explicitly NOT a full training run). Build this cache once and reuse it for all three variant runs.
 
 - [ ] **Step 2: Train** via `train_spike_aasist.py`, e.g.:
 
@@ -1571,12 +1579,13 @@ python export_spike_onnx.py  # or a short inline script calling export_spike_onn
 
 - [ ] **Step 5: Read `runs/spike_aasist_v1/gradient_diagnostics.jsonl`** and plot/inspect `cosine_human_fake_vs_style` over `step`, alongside `style_lambda`. Note whether the correlation drops as `style_lambda` ramps (evidence the confound is unwinding) or stays flat/near-zero even pre-ramp (evidence against a simple linear entanglement at the mid band).
 
-- [ ] **Step 6: Write the decision doc** (`model_training/docs/2026-09-XX-phase0-spike-decision.md`), recording, per the three-signal gate agreed in this plan's spec:
+- [ ] **Step 6: Write the decision doc** (`model_training/docs/2026-09-XX-phase0-spike-decision.md`), recording, per the three-signal gate agreed in this plan's spec, **for each of the three variants (baseline / specialist-heads / OC-Softmax)**:
   1. Confound-gate rows passed (out of the 6 rows this spike's 3-style-scalar cache can score — note explicitly that jitter/shimmer/hnr_db rows need the physio extractor and are out of this spike's scope, so "6/6" here is not directly comparable to v13's "5/14"; a full comparison needs Phase 1's full feature set) vs. the current deployed model's rows.
-  2. Gradient-correlation trend (Step 5's reading).
-  3. CPU latency proxy from Task 9, with the explicit caveat that it is not the real mobile gate.
-  - State the decision: proceed to Phase 1 (full AASIST-family training + full feature confound scoring), or pivot toward corpus/hard-negative work, per the "what would change this recommendation" section of Idea 1/Idea 3 in the brainstorm doc.
-  - Cross-link this file from `voice_guard/state.md` (new dated session entry, per that file's own maintenance convention) and from the brainstorm doc's Idea 1/Idea 3 sections.
+  2. Gradient-correlation trend (Step 5's reading; for the OC-Softmax variant, also note whether `oc_softmax_score`'s cosine-similarity distribution separates real/fake cleanly — a degenerate `w0` collapse is this objective's own failure mode, distinct from the confound question).
+  3. CPU latency proxy from Task 9, with the explicit caveat that it is not the real mobile gate. Specialist heads add negligible latency (three small linear heads on an already-computed tensor); OC-Softmax removes `human_fake_head` from the inference path entirely — note whether that changes the proxy number at all.
+  - State the decision: proceed to Phase 1 (full AASIST-family training + full feature confound scoring) with whichever variant wins (or a combination, see Roadmap), or pivot toward corpus/hard-negative work, per the "what would change this recommendation" sections of Ideas 1, 3, 5 and 6 in the brainstorm doc.
+  - Reference Task 14's pruning-status finding explicitly — a variant "winning" on an unpruned corpus is a weaker claim than the same result on a pruned one, and the decision doc should say which applies.
+  - Cross-link this file from `voice_guard/state.md` (new dated session entry, per that file's own maintenance convention) and from the brainstorm doc's Idea 1/3/4/5/6 sections.
 
 - [ ] **Step 7: Commit**
 
@@ -1610,6 +1619,311 @@ git commit -m "test(voice_guard): on-device verification of per-speaker calibrat
 
 ---
 
+### Task 12: Per-attack-family specialist heads as a comparison variant (Idea 5)
+
+**Files:**
+- Modify: `model_training/spike_model.py`, `model_training/raw_pcm_cache.py`, `model_training/train_spike_aasist.py`, `model_training/score_spike_confound.py`
+- Modify tests: `model_training/test_spike_model.py`, `model_training/test_raw_pcm_cache.py`, `model_training/test_train_spike_aasist.py`
+
+**Interfaces:**
+- `raw_pcm_cache.py` gains `IGNORE_ATTACK_FAMILY = -100`, `ATTACK_FAMILY_BY_SOURCE_SET: dict[str, int]` (`{"tts": 0, "voice_clone": 1, "other": 2}` keyed by the source's already-known generator — XTTS-tagged sources → `voice_clone`, ASVspoof/MLAAD TTS-tagged sources → `tts`, CodecFake/DECRO/unmapped fakes → `other`; real sources always map to `IGNORE_ATTACK_FAMILY`, same masking convention as `language_for_source_set`), `attack_family_for_source_set(source_set: str) -> int`. `build_raw_unit` writes an additional `attack_family.npy` `(N,)` int64 array; `RawPCMCollection` gains `.attack_family` and `iter_batches` yields it as a 6th element.
+- `spike_model.py`'s `MultiHeadSpike` gains a constructor flag `use_specialist_heads: bool = False`. When `True`: replaces the single `human_fake_head` with `self.specialist_heads = nn.ModuleDict({"tts": ..., "voice_clone": ..., "other": ...})`, each the same shape as the original `human_fake_head` (`Linear(2*mid_ch,32)`, `ReLU`, `Dropout`, `Linear(32,2)`), reading the same `mid_pooled` tensor. `forward()` always returns `human_fake_logits` (max-score combiner: `torch.stack([softmax(h)[:,1] for h in specialist outputs]).max(dim=0)`, converted back to 2-class logits via `torch.stack([1-p, p], dim=-1).log()` so downstream consumers — `score_spike_confound.py`, `compute_losses` — need no changes) plus, only when `use_specialist_heads`, a `specialist_logits: dict[str, Tensor]` key for the per-family loss.
+- `train_spike_aasist.py`'s `compute_losses` gains an `attack_family: torch.Tensor | None = None` parameter: when `out` contains `specialist_logits`, replaces the single `human_fake` BCE term with the sum of three masked per-family binary losses (real examples contribute to all three as negatives; a fake example only contributes to its own family's loss as positive, masked out of the other two via the same `ignore_index` pattern already used for language). `main()` gains `--use-specialist-heads`.
+
+- [ ] **Step 1: Write the failing tests** (append to the three existing test files)
+
+```python
+# append to test_raw_pcm_cache.py
+def test_attack_family_for_known_and_unknown_source_sets():
+    from raw_pcm_cache import IGNORE_ATTACK_FAMILY, attack_family_for_source_set
+    assert attack_family_for_source_set("xtts_hi_clone") == 1  # voice_clone
+    assert attack_family_for_source_set("real") == IGNORE_ATTACK_FAMILY
+
+
+# append to test_spike_model.py
+def test_specialist_heads_produce_combined_human_fake_logits_same_shape_as_baseline():
+    from spike_model import MultiHeadSpike
+    model = MultiHeadSpike(use_specialist_heads=True)
+    out = model(torch.randn(3, 48000))
+    assert out["human_fake_logits"].shape == (3, 2)
+    assert set(out["specialist_logits"]) == {"tts", "voice_clone", "other"}
+    for v in out["specialist_logits"].values():
+        assert v.shape == (3, 2)
+
+
+def test_baseline_head_unaffected_when_specialist_heads_disabled():
+    from spike_model import MultiHeadSpike
+    model = MultiHeadSpike(use_specialist_heads=False)
+    out = model(torch.randn(2, 48000))
+    assert "specialist_logits" not in out
+    assert out["human_fake_logits"].shape == (2, 2)
+
+
+# append to test_train_spike_aasist.py
+def test_specialist_loss_masks_out_non_owning_families_for_fake_examples():
+    from spike_model import IGNORE_LANGUAGE, MultiHeadSpike
+    from train_spike_aasist import compute_losses
+    model = MultiHeadSpike(use_specialist_heads=True)
+    out = model(torch.randn(4, 48000))
+    y = torch.tensor([0, 1, 0, 1])
+    attack_family = torch.tensor([-100, 0, -100, 1])  # real examples ignored, fakes are tts/voice_clone
+    vad_target = torch.zeros(4, out["vad_logits"].shape[1])
+    language = torch.full((4,), IGNORE_LANGUAGE)
+    style_target = torch.zeros(4, 3)
+    losses = compute_losses(out, y, vad_target, language, style_target, lambda_lang=0.5,
+                             attack_family=attack_family)
+    assert torch.isfinite(losses["human_fake"])
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest test_raw_pcm_cache.py test_spike_model.py test_train_spike_aasist.py -v`
+Expected: FAIL — `use_specialist_heads`/`attack_family_for_source_set`/`attack_family=` not defined
+
+- [ ] **Step 3: Implement.** Follow Idea 5's Approach B (max-score combiner) from the brainstorm doc exactly — do not build the learned meta-combiner (Approach C) speculatively; that's an explicit escalation-only step in the spec, gated on this variant showing a calibration problem. Reuse `dataset.IGNORE_ATTACK_TYPE`'s existing cross-entropy `ignore_index` masking pattern for the per-family loss, the same way `language`'s loss already does it — don't invent a new masking mechanism.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `pytest test_raw_pcm_cache.py test_spike_model.py test_train_spike_aasist.py -v`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add model_training/spike_model.py model_training/raw_pcm_cache.py model_training/train_spike_aasist.py model_training/score_spike_confound.py model_training/test_spike_model.py model_training/test_raw_pcm_cache.py model_training/test_train_spike_aasist.py
+git commit -m "feat(voice_guard): add per-attack-family specialist heads as a Phase-0 spike comparison variant (Idea 5)"
+```
+
+---
+
+### Task 13: OC-Softmax one-class objective as a comparison variant (Idea 6)
+
+**Files:**
+- Create: `model_training/oc_softmax.py`
+- Test: `model_training/test_oc_softmax.py`
+- Modify: `model_training/spike_model.py` (expose the mid-band pooled tensor as an `embedding` output — trivial, already computed, no new parameters), `model_training/train_spike_aasist.py` (loss-objective switch)
+
+**Interfaces:**
+- `oc_softmax.py` produces `class OCSoftmaxLoss(nn.Module)` (Zhang et al. 2021): holds a single learned unit-norm target weight `w0` of the embedding's dimension; `forward(embedding: torch.Tensor, y: torch.Tensor, m_real: float = 0.9, m_fake: float = 0.2, alpha: float = 20.0) -> torch.Tensor` returns the scalar OC-softmax loss (softplus of `alpha * (m_target - cos_sim) * sign`, `m_target` = `m_real` for genuine (`y==0`), `m_fake` for spoof (`y==1`), per the paper's formulation — genuine embeddings pulled inside a tight margin around `w0`, spoof embeddings pushed outside a looser one). Also produces `oc_softmax_score(embedding: torch.Tensor) -> torch.Tensor` returning the raw cosine similarity to `w0` (higher = more human-like), for use as `score_spike_confound.py`'s `p_fake` after a `(1 - similarity) / 2` rescale to `[0,1]`.
+- `spike_model.py`'s `MultiHeadSpike.forward()` always adds `"embedding": mid_pooled` to its output dict (no flag needed — free to compute, other consumers just ignore the extra key).
+- `train_spike_aasist.py` gains `--loss-objective {bce,oc-softmax}` (default `bce`). When `oc-softmax`: `compute_losses` replaces the `human_fake` BCE term with `OCSoftmaxLoss()(out["embedding"], y)`; `human_fake_head`'s own parameters are simply unused in this mode (left in the model rather than conditionally removed, so switching objectives doesn't change the model's state-dict shape — a smaller diff for the Task 10 comparison run).
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# model_training/test_oc_softmax.py
+from __future__ import annotations
+
+import torch
+
+from oc_softmax import OCSoftmaxLoss, oc_softmax_score
+
+
+def test_loss_is_lower_when_genuine_embeddings_align_with_w0():
+    loss_fn = OCSoftmaxLoss(embedding_dim=8)
+    aligned = loss_fn.w0.detach().unsqueeze(0).repeat(4, 1)
+    y_real = torch.zeros(4, dtype=torch.long)
+    aligned_loss = loss_fn(aligned, y_real)
+    random_loss = loss_fn(torch.randn(4, 8), y_real)
+    assert aligned_loss.item() < random_loss.item()
+
+
+def test_loss_is_finite_and_scalar_for_mixed_batch():
+    loss_fn = OCSoftmaxLoss(embedding_dim=8)
+    emb = torch.randn(5, 8, requires_grad=True)
+    y = torch.tensor([0, 1, 0, 1, 1])
+    loss = loss_fn(emb, y)
+    assert loss.dim() == 0
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert emb.grad is not None
+
+
+def test_score_is_bounded_and_gradient_direction_makes_sense():
+    loss_fn = OCSoftmaxLoss(embedding_dim=8)
+    aligned = loss_fn.w0.detach().unsqueeze(0)
+    opposite = -loss_fn.w0.detach().unsqueeze(0)
+    s_aligned = oc_softmax_score(aligned, loss_fn.w0)
+    s_opposite = oc_softmax_score(opposite, loss_fn.w0)
+    assert -1.0 <= s_opposite.item() <= s_aligned.item() <= 1.0
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest test_oc_softmax.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'oc_softmax'`
+
+- [ ] **Step 3: Write the implementation**
+
+```python
+# model_training/oc_softmax.py
+"""One-Class Softmax (Zhang, Yamagishi & Todisco, 2021 — "One-Class
+Learning Towards Synthetic Voice Spoofing Detection"), as Idea 6's
+primary lever (docs/superpowers/specs/2026-09-17-vaani-model-architecture-
+brainstorm.md). Bounds a single learned target direction w0 representing
+"genuine human speech"; genuine embeddings are pulled inside a tight
+margin around w0, spoof embeddings pushed outside a looser one. Unlike
+two-class BCE, nothing here is free to pick style as the separating axis
+by construction -- style variance within genuine speech still has to fit
+inside the SAME bound, whatever axis the trunk ends up using.
+"""
+from __future__ import annotations
+
+import torch
+from torch import nn
+
+
+class OCSoftmaxLoss(nn.Module):
+    def __init__(self, embedding_dim: int, m_real: float = 0.9, m_fake: float = 0.2, alpha: float = 20.0):
+        super().__init__()
+        self.w0 = nn.Parameter(torch.randn(embedding_dim))
+        self.m_real = m_real
+        self.m_fake = m_fake
+        self.alpha = alpha
+
+    def forward(self, embedding: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        w0 = nn.functional.normalize(self.w0, dim=0)
+        emb = nn.functional.normalize(embedding, dim=-1)
+        cos_sim = emb @ w0  # (B,)
+        is_real = (y == 0).float()
+        margin = torch.where(y == 0, torch.full_like(cos_sim, self.m_real), torch.full_like(cos_sim, self.m_fake))
+        sign = torch.where(y == 0, torch.ones_like(cos_sim), -torch.ones_like(cos_sim))
+        return nn.functional.softplus(self.alpha * sign * (margin - cos_sim)).mean()
+
+
+def oc_softmax_score(embedding: torch.Tensor, w0: torch.Tensor) -> torch.Tensor:
+    """Cosine similarity to w0: higher = more human-like. Callers rescale
+    to a [0,1] fake-probability via (1 - score) / 2 for the confound gate."""
+    return nn.functional.normalize(embedding, dim=-1) @ nn.functional.normalize(w0, dim=0)
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `pytest test_oc_softmax.py -v`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add model_training/oc_softmax.py model_training/test_oc_softmax.py model_training/spike_model.py model_training/train_spike_aasist.py
+git commit -m "feat(voice_guard): add OC-Softmax one-class objective as a Phase-0 spike comparison variant (Idea 6)"
+```
+
+---
+
+### Task 14: Check dataset-pruning status before the Task 10 decision run (Idea 4)
+
+This task has no new source file — it's a precondition check, the same way Task 11 was a verification task rather than new library code. Do it **before** re-running or extending Task 10's decision run with the Task 12/13 variants, not after.
+
+**Files:**
+- Create: `model_training/docs/2026-09-XX-pruning-status-check.md` (replace `XX` with the actual date)
+- Read: `voice_guard/docs/DATASET-PRUNING-PLAN.md` (Idea 4's full plan)
+
+- [ ] **Step 1:** Check whether any of Idea 4's three ordered experiments (reason-category ablation, scenario-relevance sweep, or the resulting fixed pruned corpus) have actually been run. As of this plan's last update they have not — `docs/DATASET-PRUNING-PLAN.md` is still "proposed, not started." If that's still true, record it explicitly rather than silently training on the unpruned corpus and letting a reader assume pruning was considered and rejected.
+- [ ] **Step 2:** If pruning has landed by the time this task runs, use the pruned corpus (per `DATASET-PRUNING-PLAN.md`'s manifest schema) as Task 10/12/13's training and held-out source instead of the corpus `corpus.TRAIN_SETS_V12`/`corpus.CORE_EVAL_SETS` currently point to, and note which variant (pruned vs. unpruned) each run in the decision doc used.
+- [ ] **Step 3:** If pruning has NOT landed, record that explicitly in `model_training/docs/2026-09-XX-pruning-status-check.md`: the Task 10 comparison (baseline / specialist-heads / OC-Softmax) is being run on the unpruned corpus, so any of the three architecture/objective variants "winning" is confounded with whatever data-quality noise Idea 4 would have removed. This isn't a reason to block Tasks 12/13 — Idea 1 and Idea 3 already establish precedent for spiking on the existing corpus — but it's a caveat the decision doc must carry forward, not silently drop.
+- [ ] **Step 4:** Cross-link this file from `model_training/docs/2026-09-XX-phase0-spike-decision.md` (Task 10) and from `voice_guard/state.md`.
+- [ ] **Step 5: Commit**
+
+```bash
+git add model_training/docs/2026-09-XX-pruning-status-check.md
+git commit -m "docs(voice_guard): record dataset-pruning status ahead of the Phase 0 spike decision (Idea 4)"
+```
+
+---
+
+### Task 15: OC-Softmax fine-tune directly on the deployed v13 SeqTCN (Idea 6, standalone)
+
+**Does not depend on Tasks 1–11 (the AASIST spike).** The brainstorm doc's
+Idea 6 section originally implied OC-Softmax was gated on Idea 1's
+raw-waveform feature-extraction decision; that was a correction made
+2026-09-18 (see that section) — the pooled→frame-level swap already
+shipped as v13, so OC-Softmax has a real embedding to test against today,
+with zero dependency on whether the AASIST spike (still unexecuted, no
+code on disk) ever runs or clears its gate. This task can be done before,
+after, or in parallel with Tasks 1–14.
+
+**Files:**
+- Create: `model_training/finetune_oc_softmax_v13.py`
+- Test: `model_training/test_finetune_oc_softmax_v13.py`
+- Consumes (read-only, unmodified, same pattern as `score_spike_confound.py`'s use of `evaluate.confound_table`): `model.VoiceGuardSeqTCN`, `train_seq_cnn.build_model_from_norm_stats` (or equivalent checkpoint-loading helper — confirm the actual name in `train_seq_cnn.py` before writing this task's code, it is not re-derived here), `feature_cache.py`/`dataset.py`'s existing loaders for the `select`/`test` split, `evaluate.confound_table`, `oc_softmax.OCSoftmaxLoss`/`oc_softmax_score` (Task 13).
+
+**Interfaces:**
+- `embed_v13(model: VoiceGuardSeqTCN, seq: torch.Tensor, scalars: torch.Tensor) -> torch.Tensor` — returns `trunk_out` (the shared hidden representation immediately before `real_fake_head`/`attack_type_head`), computed by calling `model`'s already-public submodules (`model.normalize_sequence`, `model.stem`, `model.blocks`, `model.trunk`, `model.scalar_normalize`) in the same order `VoiceGuardSeqTCN.forward` already does — **`model.py` is not modified**, this is an external function reading public attributes of an already-instantiated model, matching this whole plan's "production pipeline untouched" constraint.
+- `main()` CLI: `--checkpoint` (an existing v13 run, e.g. `runs/voice_guard_v13_final/model.pt`), `--freeze-backbone` (default `True` — see rationale below), trains `OCSoftmaxLoss` (and, only if `--freeze-backbone=False`, the loaded backbone's own parameters too) on `embed_v13`'s output using the production `select` split, then scores through `evaluate.confound_table` unmodified — the exact same gate v13's existing BCE result is already reported against, so this is a like-for-like comparison, not a new metric.
+
+**Why `--freeze-backbone=True` is the default, not an afterthought:** the question this task answers is "does changing the objective alone move the confound gate," isolated from "does more training move it" — the same one-variable-at-a-time discipline that already found the `'clean'`-recipe regression (`state.md`, "Attempt 2 + follow-up ablations"). Fine-tuning the backbone too is a real escalation worth trying if the frozen-backbone result is inconclusive, not the first thing to reach for.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# model_training/test_finetune_oc_softmax_v13.py
+from __future__ import annotations
+
+import numpy as np
+import torch
+
+from finetune_oc_softmax_v13 import embed_v13
+from model import VoiceGuardSeqTCN
+
+
+def _tiny_v13_model():
+    n_lfcc, n_scalars = 60, 6
+    return VoiceGuardSeqTCN(n_lfcc=n_lfcc, n_scalars=n_scalars,
+                             seq_mean=np.zeros(n_lfcc, dtype=np.float32), seq_std=np.ones(n_lfcc, dtype=np.float32),
+                             scalar_mean=np.zeros(n_scalars, dtype=np.float32), scalar_std=np.ones(n_scalars, dtype=np.float32))
+
+
+def test_embed_v13_matches_forwards_own_trunk_out_shape():
+    model = _tiny_v13_model().eval()
+    seq = torch.randn(3, 184, 60)
+    scalars = torch.randn(3, 6)
+    emb = embed_v13(model, seq, scalars)
+    assert emb.shape == (3, model.trunk[0].out_features)
+
+
+def test_embed_v13_is_deterministic_and_does_not_mutate_model_weights():
+    model = _tiny_v13_model().eval()
+    seq, scalars = torch.randn(2, 184, 60), torch.randn(2, 6)
+    before = [p.clone() for p in model.parameters()]
+    e1 = embed_v13(model, seq, scalars)
+    e2 = embed_v13(model, seq, scalars)
+    assert torch.allclose(e1, e2)
+    assert all(torch.equal(a, b) for a, b in zip(before, model.parameters()))
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest test_finetune_oc_softmax_v13.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'finetune_oc_softmax_v13'`
+
+- [ ] **Step 3: Write the implementation.** `embed_v13` is a straight read of `VoiceGuardSeqTCN.forward`'s own body (`model.py`, `VoiceGuardSeqTCN.forward`) up to and including `trunk_out`, calling the same public submodules in the same order — copy that control flow exactly, don't reinvent it. The `main()` CLI mirrors `score_spike_confound.py`'s structure (Task 8): load checkpoint, build data loader from the existing production split, run the loss, score via the unmodified `confound_table` import, write a JSON result.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `pytest test_finetune_oc_softmax_v13.py -v`
+
+- [ ] **Step 5: Run the actual fine-tune + confound scoring**, frozen-backbone first:
+
+```bash
+python finetune_oc_softmax_v13.py --checkpoint runs/voice_guard_v13_final/model.pt --freeze-backbone --out model_training/docs/2026-09-XX-oc-softmax-v13-result.md
+```
+
+Record the confound-gate row count against v13's existing BCE result (same rows, same held-out split) in `model_training/docs/2026-09-XX-oc-softmax-v13-result.md`. If the frozen-backbone result is inconclusive (neither clearly better nor clearly worse), re-run with `--freeze-backbone=False` and record that too, labeled separately — don't conflate the two in one number.
+
+- [ ] **Step 6: Cross-link** this result from `voice_guard/state.md` (new dated entry) and from the brainstorm doc's Idea 6 section — this is real evidence about Idea 6's core hypothesis, independent of whatever Task 10 eventually decides about the AASIST spike, and should be recorded there rather than only in this plan.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add model_training/finetune_oc_softmax_v13.py model_training/test_finetune_oc_softmax_v13.py model_training/docs/2026-09-XX-oc-softmax-v13-result.md voice_guard/state.md
+git commit -m "feat(voice_guard): test OC-Softmax directly on the deployed v13 SeqTCN, independent of the AASIST spike (Idea 6)"
+```
+
+---
+
 ## Roadmap (NOT part of this plan — do not execute as tasks)
 
 Phases 1–5 of the consolidated recommendation (full AASIST-family training, mobile distillation to RawNet2/RawNet3 or LCNN, `vaani_laptop`/`vaani/mobile` app integration) are gated on Task 10's decision and on choices not yet made (band boundaries, final λ values, which mobile architecture). Per the "No Placeholders" rule, writing detailed TDD steps for them now would mean inventing specifics that Task 10 hasn't determined yet. Once Task 10's decision doc exists, write Phase 1's plan as its own document, using this plan's Task 10 result as its spec input.
+
+**Where Ideas 4–6 sit in this roadmap, now that they're folded in:** Task 10's decision run should train and score three variants on the same corpus and same confound gate before writing the decision doc — baseline shared-head BCE (Tasks 1–9 as originally written), specialist heads (Task 12, Idea 5), and OC-Softmax (Task 13, Idea 6) — and the decision doc should record all three, not just pick a winner silently. Idea 3's GRL term applies to all three variants equally (it's already in the shared trunk path), so this is a 3-way comparison, not 3×2. Task 14 (Idea 4) determines which corpus that 3-way comparison actually ran on, and must be read alongside the decision doc, not treated as a separate, disconnected finding. If Phase 1 proceeds, it inherits whichever of the three variants (or a combination — e.g. specialist heads AND an OC-Softmax-per-specialist objective is a plausible Phase 1 refinement, not scoped here) the Task 10 decision doc recommends, plus Idea 4's pruned corpus if it has landed by then.
+
+**Task 15 is explicitly out of that dependency chain.** It doesn't wait on Task 10's go/no-go, and Task 10's outcome doesn't retroactively invalidate it — it's a direct test of Idea 6's core hypothesis (one-class objective vs. two-class BCE) on the model actually running in production today. Three outcomes are all useful, independently of what the AASIST spike decides: (a) OC-Softmax measurably improves v13's confound-gate rows → worth shipping as a v14 retrain even if the AASIST spike never happens, a materially faster win than waiting on Phase 1–5; (b) it doesn't move the gate at all → weakens Idea 6's core hypothesis generally (evidence the confound isn't purely an objective-function artifact), which should inform how much to expect from Task 13's spike-integrated variant too, not just this standalone one; (c) inconclusive on a frozen backbone → try the `--freeze-backbone=False` escalation (Step 5) before drawing either conclusion.

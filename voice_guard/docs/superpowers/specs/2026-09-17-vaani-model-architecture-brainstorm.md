@@ -356,12 +356,57 @@ its own rather than picking defaults and running once.
 
 ---
 
-# Idea 4
+# Idea 4: Manual dataset pruning as a controlled ablation
 
-*(next session — content was written in an uncommitted session and lost;
-see 2026-09-18 session notes. Not reconstructed. Whoever picks this up
-next should pull it from the mirrored Claude Doc linked at the top of this
-file, or re-derive it from scratch, before renumbering anything below.)*
+As of 2026-09-18. Full plan: `voice_guard/docs/DATASET-PRUNING-PLAN.md`
+(recovered from an uncommitted file this session after the original
+in-doc write-up was lost — see that file's own header).
+
+## What it is
+
+A **data-quality track, not an architecture track** — the natural
+complement to Ideas 1/3's "if the confound doesn't move, redirect to
+corpus/hard-negative work" fallback, run *before* concluding that fallback
+is even necessary. Full manual review of every corpus source
+(mislabeled / low_quality / redundant / off_scenario, tagged via a new
+`prune_manifest.csv` column, never silently deleted), then three ordered
+experiments on the result: a reason-category ablation (drop each category
+in isolation, see which one actually moves held-out EER), a
+scenario-relevance sweep (how much off-scenario data helps or hurts, as a
+number not an intuition), and only then — on a fixed, pruned corpus — the
+existing hyperparameter search.
+
+Motivated by evidence already in hand, not a fresh hypothesis: every
+attempt to add *more* training data (`attempt1`, `attempt2`, `ablation`,
+`english_only`, state.md "Attempt 2 + follow-up ablations") made
+cross-generator held-out EER *worse*, not better. A smaller, curated
+corpus generalizing better than a larger noisy one is the natural next
+hypothesis to test, using the same isolate-one-variable-at-a-time method
+that already found the `'clean'`-recipe regression.
+
+## Relationship to Ideas 1/3/5/6
+
+Explicitly orthogonal to the entity-vs-style representational ceiling
+(`docs/CRITICAL-entity-vs-style-confound.md`) — its own header says so: "a
+null result here confirms that ceiling is architectural, not a pruning
+failure." It doesn't compete with Ideas 1/3/5/6's architecture/objective
+work; it's the thing that should probably run **first**, or at least in
+parallel, because it's cheap relative to any retrain and because it
+changes what every later architecture experiment is trained on. Running
+Idea 1's AASIST spike (or Idea 6's OC-Softmax test) on a still-noisy,
+unpruned corpus risks the same trap already hit once: crediting an
+architecture change for a gain that was actually a data artifact (or
+missing a real architecture gain because data noise masked it).
+
+## What would change this recommendation
+
+- If the reason-category ablation shows none of the four prune categories
+  move held-out EER meaningfully, that's evidence the corpus itself isn't
+  the bottleneck — proceed with Ideas 1/3/5/6's architecture/objective
+  work on the existing corpus without waiting further on pruning.
+- If it does move EER substantially, every architecture experiment above
+  should be re-run (or at least re-validated) on the pruned corpus before
+  trusting its numbers as final.
 
 ---
 
@@ -490,12 +535,29 @@ classification/pattern-recognition backends (sources at the end).
 
 ## Origin and scope
 
-Idea 1 already recommends swapping the **trunk** (pooled MLP → AASIST-family
-raw-waveform network). Idea 6 asks a different question, one level further
-down the pipeline: independent of which trunk wins, what should the final
-**decision rule** be — is a bigger/different two-class classifier actually
-the right complement to richer features, or is the two-class framing itself
-part of the problem?
+**Correction to how this was originally scoped:** the trunk swap from a
+pooled feature vector to something richer is not an open question — it's
+already done. `voice_guard/docs/superpowers/plans/2026-09-11-frame-level-
+seq-model-and-attack-type-plan.md` replaced the pooled 66-feature MLP with
+a per-frame LFCC sequence CNN back on 2026-09-11; that shipped as
+`v11`→`v13`, and v13 (frame-level SeqTCN + 6 physio scalars) is the
+**currently deployed** model. Idea 1's AASIST-family raw-waveform trunk is
+a *further*, still-hypothetical swap on top of that — and, checked this
+session, it has **zero code written**: no `spike_model.py`/`raw_pcm_cache.py`/
+etc. exist on disk, only the unexecuted Task list in
+`docs/superpowers/plans/2026-09-17-vaani-model-architecture-phase0-spike.md`.
+There is no evidence yet — from that spike or anywhere else — that
+raw-waveform AASIST decidedly helps; it's an explicit bet gated behind
+Task 10's not-yet-run feasibility spike, precisely because the two
+remediation tracks already spent (physio features, then frame-level SeqTCN
+capacity) both failed to close the confound gate. Treat "AASIST trunk" as
+unresolved, not decided, anywhere this doc references it.
+
+Idea 6 asks a different question, one level further down the pipeline:
+independent of which trunk wins, what should the final **decision rule**
+be — is a bigger/different two-class classifier actually the right
+complement to richer features, or is the two-class framing itself part of
+the problem?
 
 ## The core idea: reframe human/fake as one-class human-verification, not two-class discrimination
 
@@ -538,20 +600,24 @@ adapted to log style-predictability of the one-class embedding too).
 
 | | A: status quo (two-class, whatever trunk) | B: OC-Softmax one-class objective (recommended) | C: AASIST-L / SpAArSIST full architecture escalation |
 | --- | --- | --- | --- |
-| What it is | Binary cross-entropy over human/fake logits, on pooled features (v9-v13) or Idea 3's mid-band tap. | Bound a genuine-human embedding manifold; score = distance from it. Loss/head change on top of an existing trunk. | Purpose-built graph-attention spectro-temporal backbone (Jung et al. 2021; SpAArSIST 2026 follow-up trims compute further, 85K params / ~332kB, 4.64% EER on In-the-Wild for the lite variant). |
+| What it is | Binary cross-entropy over human/fake logits — pooled features (v9 only) or the deployed frame-level SeqTCN (v11-v13), or Idea 3's mid-band tap if that spike ships. | Bound a genuine-human embedding manifold; score = distance from it. Loss/head change on top of an existing trunk. | Purpose-built graph-attention spectro-temporal backbone (Jung et al. 2021; SpAArSIST 2026 follow-up trims compute further, 85K params / ~332kB, 4.64% EER on In-the-Wild for the lite variant). |
 | Targets the confound directly? | No — this is the objective that produced the confound. | Yes, structurally — style variance within humans still sits inside the "normal" manifold; the model isn't rewarded for using it as the primary signal. | Indirectly — targets vocoder-artifact-level signal (phase discontinuities, formant-transition smoothness) that no pooled statistic exposes, which is a different (also promising) lever, not a competing explanation. |
 | Integration cost relative to already-deferred LCNN | N/A (baseline) | **Lower** — loss/head change on an existing embedding, no new frontend/architecture required. | **Same class of cost as LCNN, already deferred once for exactly this reason** — needs frame-level input, no ONNX export precedent in this stack, own training/iteration cycles. This is already Idea 1 Approach A / Idea 2's RawNet2/LCNN comparison table — Idea 6 doesn't duplicate that decision, just names it as the escalation path if B underperforms. |
-| Feature-extraction dependency | None (already shipped). | Needs *an* embedding, not necessarily frame-level — can test on Idea 1's current pooled representation first, though the confound literature (and this project's own two failed representational upgrades) suggest a richer embedding gives the one-class boundary more to work with. Softer dependency than C's. | Hard dependency on frame-level/raw-waveform input — gated on Idea 1's Phase 0 spike output shape, same as already flagged there. |
+| Feature-extraction dependency | None (already shipped). | **None — testable today.** v13's frame-level SeqTCN embedding is already deployed; OC-Softmax is a loss/head change on top of it, no new feature-extraction work required. If the AASIST spike ever ships, swap in its embedding instead, but B doesn't need to wait on that. | Hard dependency on raw-waveform input — gated on Idea 1's Phase 0 spike, which is **unexecuted** (no code on disk as of 2026-09-18) and not decided to help (see the correction above) — this is a real, currently-unresolved blocker for C, not a formality. |
 
-## Recommendation: Approach B first, layered onto whichever trunk Idea 1's gate selects — and worth testing combined with Idea 3's GRL
+## Recommendation: Approach B first, testable today on v13, no need to wait on Idea 1's gate
 
 Test OC-Softmax before reaching for AASIST-L/SpAArSIST (Approach C) —
 it's cheaper, targets the confound by construction rather than by hope,
 and doesn't duplicate the AASIST decision already tracked under Idea 1.
-If Idea 1's Phase 0 spike ships an embedding (from the AASIST-lite trunk,
-gated), test OC-Softmax on top of it as a natural Phase-0-adjacent
-experiment, ideally as a fourth combination alongside Idea 3's B/C variants
-(B: OC-Softmax alone; C: OC-Softmax + Idea 3's GRL together) — reusing the
+**It doesn't have to wait on that decision either**: v13's frame-level
+embedding is already deployed, so Approach B can be spiked against it
+immediately, independent of whether Idea 1's AASIST Phase 0 spike ever
+runs or clears its gate. If that spike *does* ship an embedding (from the
+AASIST-lite trunk), re-test OC-Softmax on top of it too as a natural
+Phase-0-adjacent experiment, ideally as a fourth combination alongside
+Idea 3's B/C variants (B: OC-Softmax alone; C: OC-Softmax + Idea 3's GRL
+together) — reusing the
 same `measure_confound.py` gate and held-out split, no new infrastructure.
 
 **One near-zero-cost methodology add regardless of which backend wins:**
