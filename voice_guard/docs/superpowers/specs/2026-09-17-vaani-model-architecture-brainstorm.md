@@ -358,4 +358,247 @@ its own rather than picking defaults and running once.
 
 # Idea 4
 
-*(next session)*
+*(next session — content was written in an uncommitted session and lost;
+see 2026-09-18 session notes. Not reconstructed. Whoever picks this up
+next should pull it from the mirrored Claude Doc linked at the top of this
+file, or re-derive it from scratch, before renumbering anything below.)*
+
+---
+
+# Idea 5: Per-attack-family specialist classifier heads
+
+As of 2026-09-18.
+
+## Origin and scope
+
+Originating idea: instead of one model doing everything, have "one model
+serving each individual task," so a failure can be isolated per sub-model
+rather than debugged as one opaque score. Refined through discussion down
+to a concrete, scoped version: split the single human/fake decision into
+three specialist binary heads — **TTS-vs-human**, **voice-clone-vs-human**,
+**other-vs-human** — combined into the final score, rather than splitting
+the whole pipeline (feature extraction and gating are not models today;
+see the discussion that scoped this down, this session).
+
+This is **backbone-agnostic and additive to Idea 3**, not a competitor to
+either Idea 1 or Idea 3. Idea 3's `MultiHeadSpike` already taps a single
+`human_fake_head` off the mid-band representation (`spike_model.py`,
+`docs/superpowers/plans/2026-09-17-vaani-model-architecture-phase0-spike.md`
+Task 3). Idea 5 proposes replacing that one 2-way head with three 2-way
+specialist heads reading the same mid-band pooled tensor, combined into
+one fake-probability output — a refinement one level inside Idea 3's
+architecture, not a parallel design. If Idea 1's Phase 0 spike doesn't
+clear its gate and the project stays on the deployed v13 SeqTCN instead,
+Idea 5 lands the same way on top of v13's existing pooled representation.
+
+## Why this is a real complement, not just relabeling
+
+The corpus already documents family-specific pathology that one shared
+head has to average over:
+- `en_foreign`/`hi_native`/`hi_foreign` have a sample-rate/generator
+  confound baked into their fake side (XTTS-v2 fakes natively 22050Hz vs.
+  16000Hz reals) — a TTS-specific artifact, invisible to a voice-clone
+  specialist and vice versa.
+- `fake2021` (ASVspoof2021, the largest single source) behaves very
+  differently in chunk-survival rate and EER than DECRO, CodecFake, or
+  MLAAD — different generator families, different failure modes.
+- MLAAD alone spans 116 distinct TTS architectures; lumping all of it plus
+  XTTS voice-cloning plus CodecFake neural-codec-resynthesis into one
+  binary decision forces the shared head to find one axis that works for
+  all three attack families at once, which is exactly the kind of pressure
+  that produced the style-variance shortcut in the first place
+  (`docs/CRITICAL-entity-vs-style-confound.md`).
+
+Splitting the decision doesn't force any of that averaging. Each
+specialist can key on family-specific artifacts (TTS vocoder smoothness,
+voice-conversion spectral discontinuities, codec quantization noise)
+instead of one blended boundary — and directly delivers the original
+motivation: a failing specialist localizes which attack family degraded,
+instead of one opaque combined score moving for an unknown reason.
+
+## What it does NOT fix
+
+Layered on top of Idea 1's pooled-MLP-era 63-feature vector, three heads
+reading the identical style-sensitive input would still be entity-blind in
+the same way the single MLP is — this was the caveat given when the idea
+was first floated this session, and it still holds for that representation.
+It matters less layered on Idea 3's frame-level trunk instead (richer
+mid-band representation, not just three pooled scalars), but it is still
+not a targeted fix for the entity-vs-style confound the way Idea 3's GRL
+term is — it's an orthogonal generalization/debuggability lever, not a
+replacement for Idea 3's adversarial suppression.
+
+## Approaches considered
+
+| | A: single shared head (status quo) | B: 3 specialist heads + max-score combiner (recommended) | C: 3 specialist heads + learned meta-combiner |
+| --- | --- | --- | --- |
+| What it is | Idea 3's current `human_fake_head`, one 2-way decision. | Three 2-way heads off the same mid-band tap; final fake-probability = max of the three specialist fake-probabilities. | Same three heads, plus a small linear/MLP combiner trained on the three specialist logits (optionally + the pooled mid-band vector) instead of a fixed max. |
+| Debuggability | None — one score, no attribution. | Full — each head's own accuracy/EER is directly loggable and gate-able per attack family. | Same as B, plus the combiner itself can be inspected (learned weights) but is one more component to debug. |
+| Param/compute cost | Baseline. | Trivial — two more tiny linear heads (`nn.Sequential(Linear(2*mid_ch,32), ReLU, Linear(32,2))` ×2 more), same mid-band pooled input already computed. | B's cost plus a small combiner (a handful of parameters) — still trivial in absolute terms. |
+| Calibration risk | None (single head, single threshold). | Real: if the three specialists' score distributions aren't comparable in scale, `max` over-triggers or under-triggers relative to a single-head threshold — needs its own threshold calibration pass in `evaluate.py`, not reuse of v13's existing threshold. | Lower — the combiner can learn to correct for scale differences between heads, at the cost of one more thing to overfit/miscalibrate on a small held-out set. |
+| Label requirement | None beyond existing binary real/fake labels. | Per-fake-sample attack-family label (tts / voice_clone / other), mapped from existing metadata (ASVspoof attack-type tags, XTTS = voice_clone, CodecFake/DECRO/MLAAD → other or finer-grained if their own attack-type tags are usable) — real samples don't need a family label, only fake ones do. | Same as B. |
+
+## Recommendation: Approach B first, escalate to C only if calibration demands it
+
+Start with the max-score combiner — it's the cheapest possible version and
+directly tests whether specialization helps before spending effort on a
+learned combiner. Reuse `dataset.IGNORE_ATTACK_TYPE`'s existing masking
+convention (already used for leave-out attacks) for any fake sample whose
+attack family can't be confidently mapped, rather than forcing a guess
+into "other." Escalate to Approach C only if `evaluate.py`'s confound/EER
+gates show the three specialists' score distributions are poorly
+comparable on a fixed threshold — don't build the learned combiner
+speculatively.
+
+## Risks, open questions
+
+- **"other" is a grab-bag category** (CodecFake's neural-codec-resynthesis
+  plus any future/unseen generator that isn't cleanly TTS or voice-clone).
+  A specialist trained on a heterogeneous bucket like this is the weakest
+  of the three by construction, and it's also the one most likely to see a
+  genuinely novel attack in deployment — the case that matters most. Don't
+  expect it to perform as well as the TTS/voice-clone specialists, and
+  don't let its EER stand in for "we're covered against unknown attacks."
+- **Needs per-family gate rows added to the eval harness** (`evaluate.py`,
+  `measure_confound.py` lineage) — today's gates score one binary decision;
+  scoring three specialists plus the combined output means extending, not
+  replacing, the existing four-gate protocol.
+- **Not independently useful without attack-family labels on the fake
+  side of the corpus** — mostly already present (see label-requirement row
+  above) but not audited yet for completeness/consistency across all
+  fake sources; that audit is a prerequisite task, not part of this design.
+
+## What would change this recommendation
+
+- If Idea 1's Phase 0 spike doesn't clear its gate and the project pivots
+  to corpus/hard-negative work instead of any architecture change (Idea
+  1's own stated fallback), Idea 5 still applies on top of whatever model
+  ships next — it isn't gated on Idea 1's outcome the way Idea 6 partly is
+  (see below).
+- If the attack-family label audit turns up too few labeled fakes in one
+  family to train a specialist meaningfully (most likely risk: "other"),
+  scope that specialist down or merge it back into a two-way split
+  (tts-vs-human, everything-else-vs-human) rather than forcing three heads
+  regardless of data support.
+
+---
+
+# Idea 6: Post-feature-extraction backend — one-class learning, not just a bigger two-class classifier
+
+As of 2026-09-18. Based on a deep-research pass into audio anti-spoofing
+classification/pattern-recognition backends (sources at the end).
+
+## Origin and scope
+
+Idea 1 already recommends swapping the **trunk** (pooled MLP → AASIST-family
+raw-waveform network). Idea 6 asks a different question, one level further
+down the pipeline: independent of which trunk wins, what should the final
+**decision rule** be — is a bigger/different two-class classifier actually
+the right complement to richer features, or is the two-class framing itself
+part of the problem?
+
+## The core idea: reframe human/fake as one-class human-verification, not two-class discrimination
+
+A standard binary classifier (softmax/cross-entropy over "human" vs. "fake"
+logits — what every version tried so far, v9 through v13, and what Idea 3's
+`human_fake_head` still does) is free to pick *whatever axis best separates
+the two training classes*. Empirically, on this project, it picked
+style/pacing variance (`docs/CRITICAL-entity-vs-style-confound.md`) — not
+because the data lacked entity-level signal, but because the objective
+never required the model to find it specifically.
+
+**OC-Softmax** (Zhang et al. 2021, "One-Class Learning Towards Synthetic
+Voice Spoofing Detection"; refined by a 2024 follow-up on adaptive centroid
+shift, arXiv:2406.16716) trains instead to bound a compact embedding
+manifold of *genuine human speech only*, and scores distance from that
+manifold as the fake-probability. This is a **training-objective change on
+top of an embedding**, not necessarily a much bigger model — it can sit on
+top of whichever trunk Idea 1 lands on (AASIST-lite spike embedding, or the
+deployed v13 SeqTCN's pooled representation) with a loss-function and
+final-head change, not a full architecture swap. That makes it
+meaningfully cheaper to test than Idea 1's own AASIST bet, while targeting
+the confound mechanism directly rather than hoping a richer representation
+incidentally fixes it.
+
+## Why this is different from — and complements — Idea 3's GRL approach
+
+Idea 3 suppresses style information *within* a two-class objective (GRL
+makes the mid-band representation unable to predict style, while a
+separate head still does two-class human/fake discrimination on what's
+left). Idea 6 instead changes what "fake" means at the objective level —
+distance from a genuine-human manifold, not a boundary between two labeled
+classes. **These are not mutually exclusive.** A combined spike variant —
+OC-Softmax objective on an embedding that also passes through Idea 3's GRL
+style-suppression at the same tap point — tests both levers at once and is
+a natural extension of the Phase 0 spike infrastructure already scoped
+(same `measure_confound.py` gate, same gradient-diagnostic hook could be
+adapted to log style-predictability of the one-class embedding too).
+
+## Approaches considered
+
+| | A: status quo (two-class, whatever trunk) | B: OC-Softmax one-class objective (recommended) | C: AASIST-L / SpAArSIST full architecture escalation |
+| --- | --- | --- | --- |
+| What it is | Binary cross-entropy over human/fake logits, on pooled features (v9-v13) or Idea 3's mid-band tap. | Bound a genuine-human embedding manifold; score = distance from it. Loss/head change on top of an existing trunk. | Purpose-built graph-attention spectro-temporal backbone (Jung et al. 2021; SpAArSIST 2026 follow-up trims compute further, 85K params / ~332kB, 4.64% EER on In-the-Wild for the lite variant). |
+| Targets the confound directly? | No — this is the objective that produced the confound. | Yes, structurally — style variance within humans still sits inside the "normal" manifold; the model isn't rewarded for using it as the primary signal. | Indirectly — targets vocoder-artifact-level signal (phase discontinuities, formant-transition smoothness) that no pooled statistic exposes, which is a different (also promising) lever, not a competing explanation. |
+| Integration cost relative to already-deferred LCNN | N/A (baseline) | **Lower** — loss/head change on an existing embedding, no new frontend/architecture required. | **Same class of cost as LCNN, already deferred once for exactly this reason** — needs frame-level input, no ONNX export precedent in this stack, own training/iteration cycles. This is already Idea 1 Approach A / Idea 2's RawNet2/LCNN comparison table — Idea 6 doesn't duplicate that decision, just names it as the escalation path if B underperforms. |
+| Feature-extraction dependency | None (already shipped). | Needs *an* embedding, not necessarily frame-level — can test on Idea 1's current pooled representation first, though the confound literature (and this project's own two failed representational upgrades) suggest a richer embedding gives the one-class boundary more to work with. Softer dependency than C's. | Hard dependency on frame-level/raw-waveform input — gated on Idea 1's Phase 0 spike output shape, same as already flagged there. |
+
+## Recommendation: Approach B first, layered onto whichever trunk Idea 1's gate selects — and worth testing combined with Idea 3's GRL
+
+Test OC-Softmax before reaching for AASIST-L/SpAArSIST (Approach C) —
+it's cheaper, targets the confound by construction rather than by hope,
+and doesn't duplicate the AASIST decision already tracked under Idea 1.
+If Idea 1's Phase 0 spike ships an embedding (from the AASIST-lite trunk,
+gated), test OC-Softmax on top of it as a natural Phase-0-adjacent
+experiment, ideally as a fourth combination alongside Idea 3's B/C variants
+(B: OC-Softmax alone; C: OC-Softmax + Idea 3's GRL together) — reusing the
+same `measure_confound.py` gate and held-out split, no new infrastructure.
+
+**One near-zero-cost methodology add regardless of which backend wins:**
+a 2026 paper, "An Intervention-Based Framework for Shortcut Diagnosis in
+Spoofing Countermeasures" (arXiv:2607.03150), proposes controlled acoustic
+interventions (perturbing non-speech intervals, spectral content, energy)
+to distinguish genuine generalization from shortcut-driven confounds —
+methodologically close to how this project already root-caused the
+entity-vs-style problem by hand. Worth folding into `EVAL-PROTOCOL.md` as
+a pre-ship gate regardless of which backend (B or C) ships, so a claimed
+confound fix has to survive deliberate probing, not just move the EER
+number.
+
+## Risks, open questions
+
+- **Classical statistical backends (GMM-UBM, x-vector+PLDA) were
+  considered and deprioritized**, not for cost but because neural backends
+  already outperform them for logical-access spoofing (TTS/voice-clone) —
+  this project's actual threat model. GMM-UBM stays competitive mainly for
+  physical-access/replay spoofing, not relevant here.
+- **One-class framing has its own failure mode**: if the "genuine human"
+  manifold is defined too broadly (e.g. it has to cover every accent/
+  register in the corpus, including the already-known thin Hindi/foreign-
+  accent cells), the boundary may end up loose enough that it doesn't
+  actually exclude natural-sounding fakes — the same problem in a
+  different shape. This needs the same per-cell EER breakdown Idea 1
+  already tracks, not just an aggregate number.
+- **Untested combination** (OC-Softmax + GRL together): each piece has
+  independent literature support, but stacking them on this specific
+  corpus/confound has no precedent — treat as a spike, not an assumed win,
+  same epistemic status Idea 3 already holds itself to.
+
+## What would change this recommendation
+
+- OC-Softmax alone closes the confound gate → don't bother with the
+  combined GRL variant, ship the simpler single-objective change.
+- OC-Softmax doesn't move the confound gate at all, even combined with
+  GRL → that's evidence the confound is more about data coverage
+  (per-cell accent/register gaps) than any objective-level fix, redirecting
+  toward Idea 1's own data/hard-negative pivot rather than further backend
+  experimentation.
+
+## Sources
+
+[AASIST arXiv:2110.01200](https://arxiv.org/abs/2110.01200) ·
+[SpAArSIST arXiv:2606.11674](https://arxiv.org/abs/2606.11674) ·
+[One-Class Learning Towards Synthetic Voice Spoofing Detection (Zhang et al. 2021)](https://www.researchgate.net/publication/351174426_One-Class_Learning_Towards_Synthetic_Voice_Spoofing_Detection) ·
+[One-class learning with adaptive centroid shift, arXiv:2406.16716](https://arxiv.org/pdf/2406.16716) ·
+[Intervention-Based Framework for Shortcut Diagnosis, arXiv:2607.03150](https://arxiv.org/abs/2607.03150) ·
+[Impact of Channel Variation on One-Class Learning, arXiv:2109.14900](https://arxiv.org/pdf/2109.14900)
