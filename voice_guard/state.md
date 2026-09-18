@@ -4,6 +4,49 @@
 session before doing anything else, and update it before ending a session
 that changed status, findings, or plans — see `CLAUDE.md` at the repo root.
 
+## Session 2026-09-18 — OC-Softmax (Idea 6) Task 15 code done, real run blocked (no corpus on this machine)
+
+Implemented `docs/superpowers/plans/2026-09-17-vaani-model-architecture-phase0-spike.md`
+Task 15 (OC-Softmax fine-tuned directly on the deployed v13 SeqTCN, standalone —
+no dependency on the still-unexecuted AASIST spike, Tasks 1-11) plus its one real
+prerequisite, Task 13's `oc_softmax.py` module (`OCSoftmaxLoss`/`oc_softmax_score`
+only — did not touch `spike_model.py`/`train_spike_aasist.py`, which don't exist
+yet since the spike hasn't run).
+
+**What's done and verified:** `model_training/oc_softmax.py` (clamped
+`oc_softmax_score` to `[-1, 1]` — the plan's own test hit float32 overshoot
+~1e-7 past ±1 on exact alignment/opposition, not a real bug, just needed
+clamping), `model_training/finetune_oc_softmax_v13.py` (`embed_v13()` — a
+straight read of `VoiceGuardSeqTCN.forward`'s own body up to `trunk_out`,
+`model.py` untouched — plus a training/scoring CLI, `--freeze-backbone`
+default True). Unit tests pass (`test_oc_softmax.py`, `test_finetune_oc_softmax_v13.py`),
+CLI's channel-policy gate fires correctly, `test_model_seq_cnn.py` (37
+passed/1 skipped) unaffected. Committed `3a4b421` (oc_softmax.py) and
+`4c9961d` (finetune script).
+
+**Not run for real — this machine has no training data.** `model_training/data/`
+here is only the 16MB of `prep_*.py` scripts, not the actual corpus; no
+feature cache exists (`model_training/cache/` doesn't exist). Confirmed by
+attempting the actual run: fails at `corpus.eval_specs` with
+`itw_real/select: 2177 manifest files missing, e.g.
+data/real_itw_held/1000.wav`. This matches earlier sessions' notes that the
+full corpus/cache lives on a separate training/GPU box, not this checkout.
+
+**Next: run this on the training box** where `runs/voice_guard_v13_selected/model.pt`
+and the corpus/cache already exist:
+
+```bash
+python finetune_oc_softmax_v13.py \
+    --checkpoint runs/voice_guard_v13_selected/model.pt \
+    --out docs/2026-09-XX-oc-softmax-v13-result.md
+```
+
+Frozen-backbone (default) first, per the plan's one-variable-at-a-time
+discipline; if inconclusive, re-run with `--no-freeze-backbone` and record
+both, labeled separately (plan's Step 5). Then finish the plan's Task 15
+Steps 6-7: cross-link the result from here and from the brainstorm doc's
+Idea 6 section, and commit the result doc alongside this file.
+
 ## ⚠️ CRITICAL — read `docs/CRITICAL-entity-vs-style-confound.md` before any further model work
 
 Found 2026-09-11, on any device, before touching the model again: the
@@ -16,6 +59,19 @@ sounding pacing slips through. This is a representational ceiling of the
 not fix it. Three remediation tracks (cheap/partial to
 expensive/likely-effective) are laid out in that file, none yet started.
 Read it in full before deciding what to do next.
+
+## Proposed, not started: manual dataset pruning as a controlled ablation
+
+`docs/DATASET-PRUNING-PLAN.md` (written 2026-09-18, from brainstorming, no
+code yet) — a plan to manually review every corpus source for mislabeled/
+low-quality/redundant/off-scenario clips (tagged via a new manifest column,
+not silently deleted), then run it as reason-category ablations + a
+scenario-relevance data-amount sweep, *before* any further hyperparameter
+tuning on the resulting fixed corpus. Motivated by the already-proven
+finding that more raw training data made cross-generator EER worse, not
+better (see "Attempt 2 + follow-up ablations" below). Explicitly does NOT
+target the entity-vs-style representational ceiling — read the CRITICAL doc
+above first.
 
 ## Session 2026-09-11 (PM) — playback→mic capture collapse root-caused; app gains a deterministic file-scan path
 

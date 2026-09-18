@@ -631,6 +631,13 @@ a pre-ship gate regardless of which backend (B or C) ships, so a claimed
 confound fix has to survive deliberate probing, not just move the EER
 number.
 
+**Status (2026-09-18):** Task 15's code shipped (`model_training/oc_softmax.py`,
+`model_training/finetune_oc_softmax_v13.py`, commits `3a4b421`/`4c9961d`) —
+not yet run for real, blocked on this session's machine having no training
+corpus/feature cache. See `voice_guard/state.md`'s "Session 2026-09-18" entry
+for the exact command to run on the training box and what to do with the
+result once it exists.
+
 ## Risks, open questions
 
 - **Classical statistical backends (GMM-UBM, x-vector+PLDA) were
