@@ -89,6 +89,13 @@ harness (`evaluate.py`). The code enforces it (`eval_protocol.py` +
 `test_eval_protocol.py`); if you change the protocol, change doc, code and
 tests together.
 
+**Every session that changes code, configs, protocols, or deps MUST append
+to `DECISIONS.md`** at the repo root (template + rules at the top of that
+file: context → options → decision → why-this-over-that → tradeoff →
+evidence). Backfilled D-001…D-020 on 2026-09-22; new entries go under
+`§ Future Log` with the next free number. Never rewrite past entries —
+supersede with a new one linking `Supersedes: D-XXX`.
+
 ## Open / unresolved — Module A "final scoped re-review"
 
 A user request came in to: adjudicate a "Module A final scoped re-review"
