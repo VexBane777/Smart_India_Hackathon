@@ -1,0 +1,19 @@
+{
+ "n_windows": 1569,
+ "channels": [
+  "none",
+  "whatsapp",
+  "gsm_2g"
+ ],
+ "max_abs_feature_delta": 0.125,
+ "models": {
+  "runs\\voice_guard_v13_selected\\model.pt": {
+   "arch": "seqtcn_v2",
+   "max_abs_delta_p": 0.0008080601692199707,
+   "mean_abs_delta_p": 6.69752771500498e-05,
+   "flips_at_0.5": 0,
+   "flips_at_0.6": 0,
+   "pass": true
+  }
+ }
+}
